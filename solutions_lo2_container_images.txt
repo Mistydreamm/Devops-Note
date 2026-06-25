@@ -1,0 +1,996 @@
+================================================================================
+           GUIDE DE RÉVISION COMPLET - DEVOPS & CONTENEURS (LO1 à LO6)
+================================================================================
+
+Ce document regroupe les réponses, démonstrations pratiques (Containerfiles, commandes)
+et explications théoriques pour l'ensemble des modules d'apprentissage (LO1 à LO6).
+
+--------------------------------------------------------------------------------
+1/10 - Intro to DevOps
+--------------------------------------------------------------------------------
+Avant l'examen, assurez-vous d'avoir créé et configuré les comptes suivants :
+1. Quay.io : Registre d'images Red Hat sécurisé.
+2. Red Hat Academy (RHA) : Portail d'apprentissage académique et accès aux labs.
+3. Docker Hub : Registre d'images public par défaut.
+4. Infoeduka : Portail de suivi académique et d'examen.
+
+--------------------------------------------------------------------------------
+2/10 - LO1 — Use of containers and container services
+--------------------------------------------------------------------------------
+
+1. Lancement d'httpd détaché, port 8081:80, name et hostname personnalisés :
+   $ podman run -d --name mon-web --hostname web-host -p 8081:80 docker.io/library/httpd
+   Vérification :
+   $ podman inspect mon-web --format 'Nom: {{.Name}} | Hostname: {{.Config.Hostname}}'
+
+2. restart=always et kill du processus principal :
+   $ podman run -d --name test-restart --restart=always docker.io/library/alpine sleep 100
+   # Tuer le processus principal depuis l'hôte
+   $ podman kill test-restart
+   # Attendre 2 secondes et vérifier
+   $ podman ps --filter name=test-restart
+   $ podman inspect test-restart --format 'Nombre de restarts: {{.RestartCount}}'
+
+3. Limitation de ressources (Memory & CPU) :
+   $ podman run -d --name test-limits --memory=256m --cpus=0.5 docker.io/library/alpine sleep 1d
+   Vérification :
+   $ podman inspect test-limits --format 'Memory: {{.HostConfig.Memory}} bytes | NanoCPUs: {{.HostConfig.NanoCpus}}'
+   $ podman stats --no-stream test-limits
+
+4. Variables d'environnement vs fichier d'environnement :
+   $ podman run -d --name env-direct --env MON_ENV=direct docker.io/library/alpine sleep 1d
+   $ echo "MON_ENV_FILE=fichier" > env.list
+   $ podman run -d --name env-fichier --env-file env.list docker.io/library/alpine sleep 1d
+   Vérification :
+   $ podman exec env-direct env | grep MON_ENV
+   $ podman exec env-fichier env | grep MON_ENV
+
+5. Réseau bridge personnalisé et IP du conteneur :
+   $ podman network create mon-reseau
+   $ podman run -d --name conteneur-reseau --network mon-reseau docker.io/library/alpine sleep 1d
+   Vérification :
+   $ podman network inspect mon-reseau --format '{{range .Containers}}{{.Name}} : {{.IPv4Address}}{{end}}'
+   $ podman inspect conteneur-reseau --format '{{.NetworkSettings.Networks.mon_reseau.IPAddress}}'
+
+6. Pause et Unpause d'un conteneur :
+   $ podman pause conteneur-reseau
+   # Dans cet état (Paused), les processus reçoivent un signal SIGSTOP (ou freeze via cgroups).
+   # Ils conservent leur état en mémoire RAM mais ne consomment plus aucun cycle CPU.
+   $ podman unpause conteneur-reseau
+   # Le conteneur reprend son exécution normale (signal SIGCONT).
+
+7. Renommer un conteneur :
+   $ podman rename conteneur-reseau conteneur-nouveau
+   $ podman ps -a --filter name=conteneur-nouveau
+
+8. Drapeaux de podman logs :
+   # --tail N : Affiche uniquement les N dernières lignes de logs.
+   $ podman logs --tail 10 mon-web
+   # --since T : Affiche les logs depuis une durée T (ex: 10m pour 10 minutes).
+   $ podman logs --since 10m mon-web
+   # -f (follow) : Suit les logs en temps réel (interactif).
+   $ podman logs -f mon-web
+
+9. Extraction de champs spécifiques avec podman inspect --format (Go Templates) :
+   # Obtenir l'adresse IP :
+   $ podman inspect mon-web --format '{{.NetworkSettings.IPAddress}}'
+   # Obtenir le statut de redémarrage :
+   $ podman inspect test-restart --format '{{.State.Restarting}}'
+
+10. Copier des fichiers avec podman cp :
+    $ echo "Fichier hôte" > hote.txt
+    # Copie hôte -> conteneur
+    $ podman cp hote.txt mon-web:/tmp/conteneur.txt
+    # Copie conteneur -> hôte
+    $ podman cp mon-web:/tmp/conteneur.txt ./hote_retour.txt
+
+11. Modification interactive du conteneur et persistance :
+    $ podman run -d --name test-exec docker.io/library/alpine sleep 1d
+    $ podman exec -it test-exec apk add curl
+    # Cette modification est éphémère. Si le conteneur est recréé (podman rm puis podman run),
+    # l'outil curl est perdu car le conteneur repart de l'image d'origine. Les changements persistants
+    # doivent être écrits dans le Containerfile.
+
+12. Outils de diagnostic process et ressources :
+    $ podman top mon-web    # Affiche les processus (PID, CPU, etc.) actifs dans le conteneur.
+    $ podman stats mon-web  # Affiche la consommation CPU, mémoire et réseau en direct.
+
+13. Auto-suppression (--rm) :
+    $ podman run --rm docker.io/library/alpine ls /
+    # Utilité : Évite d'accumuler des conteneurs arrêtés inutiles (gaspillage d'espace disque).
+    # Perte : Impossible de déboguer en inspectant l'état final du conteneur défaillant ou d'analyser ses logs.
+
+14. Montage Bind en lecture seule (ro) :
+    $ mkdir -p $(pwd)/data
+    $ podman run --rm -v $(pwd)/data:/mnt:ro docker.io/library/alpine touch /mnt/test.txt
+    # Résultat attendu : "touch: /mnt/test.txt: Read-only file system", prouvant le rejet de l'écriture.
+
+15. Filtrage par Labels :
+    $ podman run -d --name c-dev --label projet=alpha --label env=dev docker.io/library/alpine sleep 1d
+    $ podman run -d --name c-prod --label projet=alpha --label env=prod docker.io/library/alpine sleep 1d
+    $ podman ps --filter label=env=dev
+
+16. Validation de podman commit :
+    $ podman run --name source-commit docker.io/library/alpine sh -c "echo 'commit' > /test.txt"
+    $ podman commit source-commit image-commit:1.0
+    $ podman run --rm image-commit:1.0 cat /test.txt
+
+17. Analyse des changements du système de fichiers (podman diff) :
+    $ podman run --name test-diff docker.io/library/alpine sh -c "touch /nouveau && rm /etc/resolv.conf && echo 'update' >> /etc/hosts"
+    $ podman diff test-diff
+    # Signification des marqueurs :
+    # A (Added) : Fichier ou dossier ajouté.
+    # C (Changed) : Fichier ou dossier modifié.
+    # D (Deleted) : Fichier ou dossier supprimé.
+
+18. Conteneur isolé (--network none) :
+    $ podman run --rm --network none docker.io/library/alpine ping -c 1 8.8.8.8
+    # Résultat attendu : Échec de la commande réseau (Network is unreachable).
+    # Cas d'usage : Traitement de données confidentielles ou exécution d'algorithmes de cryptographie isolés.
+
+19. Liaison à une IP hôte spécifique :
+    $ podman run -d --name web-local -p 127.0.0.1:8082:80 docker.io/library/httpd
+    # Le port n'est accessible que sur l'interface de bouclage locale (localhost/127.0.0.1).
+    # Il n'est pas exposé sur l'adresse IP externe du système ou de la VM.
+
+20. Liste des ports publiés :
+    $ podman port web-local
+    $ podman inspect web-local --format '{{.NetworkSettings.Ports}}'
+
+21. Exécution en tant qu'utilisateur non-root (--user) :
+    $ podman run --rm --user 1000 docker.io/library/alpine id
+    # Résultat attendu : uid=1000 gid=0(root) (ou gid=1000) indiquant que le processus principal n'a pas les droits root.
+
+22. Automatisation via systemd / Quadlet :
+    Créer le fichier `~/.config/containers/systemd/mon-web.container` :
+    ```ini
+    [Container]
+    Image=docker.io/library/httpd:latest
+    PublishPort=8080:80
+    ```
+    $ systemctl --user daemon-reload
+    $ systemctl --user start mon-web.service
+    # systemd prend en charge le démarrage automatique au boot et le redémarrage automatique en cas de panne.
+
+23. Suivi des événements du cycle de vie (podman events) :
+    Terminal 1 :
+    $ podman events
+    Terminal 2 :
+    $ podman run -d --name c-event docker.io/library/alpine sleep 2
+    # Événements observés : container create, container start, container stop, container exit, container cleanup.
+
+--------------------------------------------------------------------------------
+3/10 - LO2 — Managing and creating container images
+--------------------------------------------------------------------------------
+
+1. ARG et Tag dynamique au build time :
+   Créer `Containerfile.arg` :
+   ```dockerfile
+   ARG TAG=latest
+   FROM alpine:${TAG}
+   RUN echo "Base: alpine:${TAG}"
+   ```
+   $ podman build --build-arg TAG=3.18 -f Containerfile.arg -t myapp:3.18 .
+   $ podman build --build-arg TAG=3.19 -f Containerfile.arg -t myapp:3.19 .
+
+2. Multi-stage Build vs Single-stage :
+   Créer `hello.c` :
+   ```c
+   #include <stdio.h>
+   int main() { printf("Hello World!\n"); return 0; }
+   ```
+   Créer `Containerfile.single` :
+   ```dockerfile
+   FROM alpine:latest
+   RUN apk add --no-cache gcc musl-dev
+   COPY hello.c .
+   RUN gcc -o hello hello.c
+   CMD ["./hello"]
+   ```
+   Créer `Containerfile.multi` :
+   ```dockerfile
+   FROM alpine:latest AS builder
+   RUN apk add --no-cache gcc musl-dev
+   COPY hello.c .
+   RUN gcc -o hello hello.c
+
+   FROM alpine:latest
+   COPY --from=builder /hello /hello
+   CMD ["/hello"]
+   ```
+   $ podman build -f Containerfile.single -t hello:single .
+   $ podman build -f Containerfile.multi -t hello:multi .
+   # Comparer les tailles : hello:multi est bien plus petite (~7Mo vs ~150Mo).
+
+3. Exclusion via .containerignore :
+   Créer un fichier `.containerignore` :
+   ```text
+   secrets.txt
+   ```
+   Créer `Containerfile.ignore` :
+   ```dockerfile
+   FROM alpine:latest
+   COPY . /app
+   CMD ["ls", "/app"]
+   ```
+   $ echo "secret" > secrets.txt
+   $ podman build -f Containerfile.ignore -t test-ignore .
+   $ podman run --rm test-ignore
+   # Le fichier secrets.txt n'apparaît pas dans la liste.
+
+4. Multi-tagging d'image et convention :
+   $ podman build -t quay.io/myuser/app:1.0 -t quay.io/myuser/app:1 -t quay.io/myuser/app:latest .
+   # Convention : [registre]/[namespace/compte]/[nom_image]:[tag]
+
+5. Historique des couches et réduction :
+   $ podman history myapp:latest
+   # Réduction : Enchaîner les instructions RUN avec &&, nettoyer les caches dans la même couche
+   # ou utiliser l'argument podman build --squash.
+
+6. Utilisateur non-root (USER) et WORKDIR :
+   Créer `Containerfile.user` :
+   ```dockerfile
+   FROM alpine:latest
+   RUN adduser -D userapp
+   WORKDIR /home/userapp/app
+   RUN chown userapp:userapp /home/userapp/app
+   USER userapp
+   CMD ["whoami"]
+   ```
+   $ podman build -f Containerfile.user -t test-user .
+   $ podman run --rm test-user  # Affiche: userapp
+
+7. HEALTHCHECK dans un Containerfile :
+   Créer `Containerfile.health` :
+   ```dockerfile
+   FROM alpine:latest
+   HEALTHCHECK --interval=2s --timeout=2s --retries=2 CMD test -f /tmp/healthy || exit 1
+   CMD ["sh", "-c", "sleep 1 && touch /tmp/healthy && sleep 3600"]
+   ```
+   $ podman build -f Containerfile.health -t test-health .
+   $ podman run -d --name c-health test-health
+   $ sleep 4 && podman ps
+   $ podman healthcheck run c-health
+
+8. ENTRYPOINT vs CMD :
+   Créer `Containerfile.ep` :
+   ```dockerfile
+   FROM alpine:latest
+   ENTRYPOINT ["echo", "Hello"]
+   CMD ["World"]
+   ```
+   $ podman build -f Containerfile.ep -t test-ep .
+   $ podman run --rm test-ep            # Affiche: Hello World
+   $ podman run --rm test-ep Developer  # Affiche: Hello Developer (override de CMD)
+
+9. ADD vs COPY :
+   * COPY : Copie brute et transparente des fichiers locaux du build context.
+   * ADD : Télécharge depuis des URLs et décompresse automatiquement les archives tar locales.
+   Créer `Containerfile.addcopy` :
+   ```dockerfile
+   FROM alpine:latest
+   COPY config.json /app/config.json
+   ADD local-archive.tar.gz /app/
+   ```
+
+10. Sauvegarde et restauration tarball :
+    $ podman save -o app.tar myapp:latest
+    $ podman rmi myapp:latest
+    $ podman load -i app.tar
+    # Cas d'usage : Transfert d'images vers des systèmes Air-gapped (hors ligne).
+
+11. Pull par Digest :
+    $ podman pull alpine@sha256:c5b1261d924d4c8c39e08960b9f47657d2582549280e85b2ad46c300c02f0a10
+    # Sécurité : Un tag peut être modifié ou écrasé sur le registre, le digest est immuable.
+
+12. Désactivation du cache (--no-cache) :
+    $ podman build --no-cache -t myapp:latest .
+    # Utilité : Force l'exécution de toutes les instructions (ex: apt-get update).
+
+13. Containerfile personnalisé et Build Context :
+    $ podman build -f custom/MyContainerfile -t myapp:custom .
+    # Le '.' représente le build context.
+
+14. COPY --chown :
+    Créer `Containerfile.chown` :
+    ```dockerfile
+    FROM alpine:latest
+    RUN adduser -D user1
+    COPY --chown=user1:user1 hello.txt /app/hello.txt
+    USER user1
+    ```
+    $ touch hello.txt
+    $ podman build -f Containerfile.chown -t test-chown .
+
+15. ARG (Build-time) vs ENV (Runtime) :
+    Créer `Containerfile.argenv` :
+    ```dockerfile
+    FROM alpine:latest
+    ARG VERSION
+    ENV APP_VERSION=${VERSION:-default}
+    CMD echo "Version runtime: ${APP_VERSION}"
+    ```
+
+16. Authentification Registre :
+    $ podman login quay.io
+    # Identifiants stockés encodés/chiffrés dans : $XDG_RUNTIME_DIR/containers/auth.json
+
+17. Nettoyage d'images (prune et rmi) :
+    $ podman image prune -f
+    $ podman rmi myapp:latest
+    # "Dangling" (pendantes) : Images sans tag (ex: <none>:<none>) issues de builds successifs.
+
+18. Serveur Web Python statique :
+    Créer `Containerfile.server` :
+    ```dockerfile
+    FROM python:3.11-slim
+    WORKDIR /app
+    COPY . .
+    EXPOSE 8000
+    CMD ["python", "-m", "http.server", "8000"]
+    ```
+
+19. Pinning des paquets :
+    ```dockerfile
+    FROM alpine:3.18
+    RUN apk add --no-cache curl=8.5.0-r0
+    ```
+    # Garantit la reproductibilité absolue du build à long terme.
+
+20. Inspecter une image inconnue :
+    $ podman image inspect alpine:latest --format 'Entrypoint: {{.Config.Entrypoint}} | CMD: {{.Config.Cmd}} | Ports: {{.Config.ExposedPorts}}'
+
+21. RUN multi-ligne optimisé :
+    ```dockerfile
+    FROM debian:12
+    RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+     && apt-get clean \
+     && rm -rf /var/lib/apt/lists/*
+    ```
+    # Si le nettoyage n'est pas effectué dans le même RUN, les données restent dans la couche.
+
+22. Miroirs de registres :
+    $ podman tag myapp:latest docker.io/myuser/myapp:latest
+    $ podman tag myapp:latest quay.io/myuser/myapp:latest
+    $ podman push docker.io/myuser/myapp:latest
+    $ podman push quay.io/myuser/myapp:latest
+
+23. Paquets installés et sécurité des images minimales :
+    $ podman run --rm alpine:latest apk info -v
+    # Les images minimales réduisent le nombre de binaires exploitables par un hacker (CVEs).
+
+--------------------------------------------------------------------------------
+4/10 - LO3 — Application delivery using containers, network architecture, etc.
+--------------------------------------------------------------------------------
+
+1. Podman Pod et communication Localhost :
+   $ podman pod create --name mon-pod -p 8080:80
+   $ podman run -d --pod mon-pod --name web-container docker.io/library/httpd
+   $ podman run -d --pod mon-pod --name app-container docker.io/library/alpine sleep 1d
+   # Dans le pod, app-container accède à web-container via localhost
+   $ podman exec -it app-container wget -qO- http://localhost:80
+
+2. Résolution DNS dans les réseaux personnalisés :
+   $ podman network create reseau-dns
+   $ podman run -d --network reseau-dns --name db-postgres -e POSTGRES_PASSWORD=secret docker.io/library/postgres
+   $ podman run -d --network reseau-dns --name app-client docker.io/library/alpine sleep 1d
+   $ podman exec -it app-client ping -c 1 db-postgres
+
+3. Déploiement d'une stack Gitea + PostgreSQL :
+   $ podman network create gitea-net
+   $ podman run -d --name gitea-db --network gitea-net -e POSTGRES_USER=gitea -e POSTGRES_PASSWORD=gitea -e POSTGRES_DB=gitea docker.io/library/postgres:15
+   $ podman run -d --name gitea-app --network gitea-net -p 3000:3000 docker.io/gitea/gitea:latest
+
+4. Persistance des données avec volumes nommés :
+   $ podman volume create pg-data
+   $ podman run -d --name db-vol -v pg-data:/var/lib/postgresql/data -e POSTGRES_PASSWORD=secret docker.io/library/postgres
+   $ podman rm -f db-vol
+   # Recréer le conteneur, les données restent intactes
+   $ podman run -d --name db-vol -v pg-data:/var/lib/postgresql/data -e POSTGRES_PASSWORD=secret docker.io/library/postgres
+
+5. Secret Podman vs Variable d'environnement :
+   $ echo "motdepasse123" | podman secret create mon_mdp -
+   $ podman run -d --name db-secret --secret mon_mdp -e POSTGRES_PASSWORD_FILE=/run/secrets/mon_mdp docker.io/library/postgres
+   # Avantage de sécurité : Le mot de passe n'apparaît pas dans la commande de lancement (ps / inspect).
+
+6. Podman Compose (compose.yaml) :
+   Créer `compose.yaml` :
+   ```yaml
+   services:
+     web:
+       image: nginx
+       ports:
+         - "8080:80"
+       networks:
+         - app-net
+     db:
+       image: postgres
+       environment:
+         POSTGRES_PASSWORD: secret
+       networks:
+         - app-net
+   networks:
+     app-net:
+   ```
+   $ podman compose up -d
+   $ podman compose ps
+
+7. Réseau Interne isolé en Compose :
+   Dans le `compose.yaml`, déclarer le réseau comme `internal: true` :
+   ```yaml
+   networks:
+     private-net:
+       internal: true
+   ```
+
+8. Compose Healthcheck et dépendances d'initialisation :
+   ```yaml
+     db:
+       image: postgres
+       environment:
+         POSTGRES_PASSWORD: secret
+       healthcheck:
+         test: ["CMD-SHELL", "pg_isready -U postgres"]
+         interval: 5s
+         retries: 5
+     app:
+       image: alpine
+       command: sleep 3600
+       depends_on:
+         db:
+           condition: service_healthy
+   ```
+
+9. Utilisation d'env_file dans Compose :
+   Créer un fichier `.env` :
+   ```text
+   DB_PASSWORD=secret
+   ```
+   Dans le `compose.yaml` :
+   ```yaml
+     db:
+       image: postgres
+       env_file:
+         - .env
+   ```
+
+10. Mise à l'échelle (Scale) en Compose :
+    $ podman compose up --scale app=3 -d
+    # Les requêtes sont réparties au niveau DNS (Round-Robin) sur les conteneurs.
+
+11. Bind Mount vs Named Volume :
+    * Bind Mount : Utile pour partager des fichiers de configuration ou du code en développement.
+    * Named Volume : Géré par Podman, optimal pour les bases de données (performances et gestion automatique des droits).
+
+12. Sauvegarde et Restauration de Volume Nommé :
+    # Sauvegarde :
+    $ podman run --rm -v pg-data:/data -v $(pwd):/backup docker.io/library/alpine tar czf /backup/pg-backup.tar.gz -C /data .
+    # Restauration :
+    $ podman volume create pg-data-new
+    $ podman run --rm -v pg-data-new:/data -v $(pwd):/backup docker.io/library/alpine tar xzf /backup/pg-backup.tar.gz -C /data
+
+13. Proxy inverse Nginx :
+    $ podman network create proxy-net
+    $ podman run -d --name backend-app --network proxy-net docker.io/library/alpine python3 -m http.server 8080
+    # Configurer Nginx en local pour proxy_pass http://backend-app:8080
+    $ podman run -d --name proxy-nginx -p 80:80 --network proxy-net -v ./nginx.conf:/etc/nginx/nginx.conf:ro docker.io/library/nginx
+
+14. Ajout d'Adminer pour inspecter la base de données :
+    $ podman run -d --name adminer-ui --network proxy-net -p 8081:8080 docker.io/library/adminer
+
+15. Générer des manifests Kubernetes :
+    $ podman generate kube mon-pod > pod.yaml
+    # Permet de porter une architecture locale Podman vers un cluster K8s.
+
+16. Exécuter un fichier Kubernetes YAML avec Podman :
+    $ podman kube play pod.yaml
+    $ podman kube play --down pod.yaml
+
+17. Limites CPU/Mémoire en Compose :
+    ```yaml
+        deploy:
+          resources:
+            limits:
+              cpus: '0.5'
+              memory: 256M
+    ```
+
+18. Namespaces partagés dans un Pod :
+    Partagés : Network (IP et ports communs), IPC, UTS (Hostname).
+    Non-partagés par défaut : PID (les processus de chaque conteneur sont isolés).
+
+19. Échec et résolution de la découverte inter-réseaux :
+    $ podman network create net-a && podman network create net-b
+    # Conteneur A sur net-a, Conteneur B sur net-b. Impossible de se pinguer.
+    # Résolution :
+    $ podman network connect net-a conteneur-b
+
+20. Conteneur multi-cartes réseau (Frontend / Backend) :
+    Un conteneur peut se connecter à deux réseaux pour agir comme passerelle sécurisée, tout en laissant la BDD isolée uniquement sur le réseau backend.
+
+21. Logs globaux en Compose :
+    $ podman compose logs -f
+
+22. Volume partagé en écriture (Risques) :
+    Risque élevé d'incohérence des données et de verrous concurrents (race conditions) si deux instances tentent d'écrire en même temps sur le même fichier.
+
+23. Démanteler une stack Compose :
+    $ podman compose down
+    # Pour supprimer également les volumes nommés persistants :
+    $ podman compose down --volumes
+
+--------------------------------------------------------------------------------
+5/10 - LO4 — Accelerated delivery of multilayer applications using containers
+--------------------------------------------------------------------------------
+
+1. Création impérative de déploiement et export YAML :
+   $ kubectl create deployment web --image=nginx:1.25 --replicas=3 --dry-run=client -o yaml > web-deploy.yaml
+
+2. Authentification DockerHub (Créer un Secret d'image pull) :
+   $ kubectl create secret docker-registry hub-cred --docker-server=https://index.docker.io/v1/ --docker-username=monuser --docker-password=monpass --docker-email=monemail@test.com
+   # Dans le déploiement, ajouter : imagePullSecrets: [{name: hub-cred}]
+
+3. Changement d'échelle (kubectl scale vs Manifest) :
+   $ kubectl scale deployment web --replicas=5
+   # Alternative : Modifier replicas dans le yaml et appliquer :
+   $ kubectl apply -f web-deploy.yaml
+   # Vérification :
+   $ kubectl get rs
+
+4. Mise à jour progressive (Rolling Update) :
+   $ kubectl set image deployment/web nginx=nginx:1.27
+   $ kubectl rollout status deployment/web
+
+5. Historique de déploiement et Rollback :
+   $ kubectl rollout history deployment/web
+   $ kubectl rollout undo deployment/web --to-revision=1
+   # La colonne CHANGE-CAUSE est renseignée via l'annotation :
+   # kubernetes.io/change-cause="Mon message de commit"
+
+6. Stratégie RollingUpdate :
+   `maxSurge: 1` : Autorise la création temporaire d'un pod supplémentaire pendant la transition.
+   `maxUnavailable: 0` : Garantit qu'aucun pod existant n'est arrêté tant que le nouveau pod n'est pas opérationnel (zéro downtime).
+
+7. Stratégie Recreate :
+   Arrête tous les anciens conteneurs avant d'en démarrer de nouveaux.
+   Recommandé quand l'application ne supporte pas le fonctionnement simultané de deux versions (ex: migration de schéma de BDD non rétrocompatible).
+
+8. Requêtes et Limites dans le Pod Spec :
+   ```yaml
+   resources:
+     requests:
+       memory: "64Mi"
+       cpu: "250m"
+     limits:
+       memory: "128Mi"
+       cpu: "500m"
+   ```
+
+9. revisionHistoryLimit :
+   Définit le nombre d'anciens ReplicaSets à conserver en mémoire dans etcd. Conserver 3 versions permet de revenir en arrière sur les 3 dernières étapes.
+
+10. Tag inexistant (Rollout bloqué) :
+    $ kubectl set image deployment/web nginx=nginx:inexistant
+    # Le déploiement crée un nouveau pod qui reste en ImagePullBackOff.
+    # Les anciens pods restent actifs et continuent de traiter le trafic.
+
+11. Sélecteurs d'étiquettes (Labels) :
+    $ kubectl get pods -l app=web
+    # Lien : Le Deployment cible un ReplicaSet, qui cible à son tour les Pods possédant les labels correspondants.
+
+12. Exposition de service :
+    $ kubectl expose deployment web --port=80 --target-port=80 --type=ClusterIP
+
+13. Conteneur Sidecar :
+    Deux conteneurs définis au sein du même Pod partagent l'interface réseau localhost (127.0.0.1) et peuvent s'échanger des fichiers via un volume de type `emptyDir`.
+
+14. NodeSelector en état en attente (Pending) :
+    Si un Pod définit un `nodeSelector` pour un label inexistant sur vos nœuds physiques, l'ordonnanceur (scheduler) ne peut pas planifier le Pod, qui reste indéfiniment en statut `Pending`.
+
+15. Bare Pod (Pod seul sans contrôleur) :
+    Si vous supprimez un Pod nu, il est détruit définitivement. Un Pod géré par un Deployment sera immédiatement recréé pour restaurer la taille du ReplicaSet.
+
+16. StatefulSet Redis et headless service :
+    Nécessite `clusterIP: None` pour le service. Les noms des pods restent fixes (`redis-0`, `redis-1`, `redis-2`).
+
+17. DaemonSet :
+    Garantit l'exécution d'une instance du Pod sur chaque nœud du cluster (idéal pour les agents de log ou de monitoring).
+
+18. Kubernetes Job :
+    Exécute une tâche ponctuelle jusqu'à sa réussite (Completion).
+    $ kubectl logs job/nom-du-job
+
+19. CronJob et Suspension :
+    $ kubectl get cronjobs
+    # Suspendre :
+    $ kubectl patch cronjob mon-cronjob -p '{"spec":{"suspend":true}}'
+
+20. Déclencher manuellement un Job depuis un CronJob :
+    $ kubectl create job --from=cronjob/mon-cronjob mon-job-test
+
+21. Ordre de démarrage d'un StatefulSet :
+    Démarre les instances l'une après l'autre de manière ordonnée (0, puis 1, puis 2) et attend que le conteneur précédent soit marqué sain (Ready) avant de lancer le suivant.
+
+22. Partage de volume emptyDir :
+    ```yaml
+    volumes:
+    - name: shared-data
+      emptyDir: {}
+    ```
+
+23. Lister le stockage :
+    $ kubectl get storageclass,pv,pvc
+
+24. ConfigMap monté en volume :
+    Chaque clé de la ConfigMap est projetée sous forme de fichier individuel dans le dossier de destination spécifié dans le Pod.
+
+25. subPath dans les montages ConfigMap :
+    Permet de monter un seul fichier de configuration sans écraser les fichiers existants dans le répertoire cible.
+    *Attention* : Les fichiers montés via `subPath` ne se mettent pas à jour automatiquement lorsque la ConfigMap change.
+
+26. Volume de Secret :
+    Les secrets montés en volume sont décodés en clair en mémoire volatile du Pod (tmpfs) avec des droits d'accès limités (`0400`).
+
+27. Comportement des PVC de StatefulSet :
+    Le StatefulSet alloue un PVC par réplique. Supprimer le StatefulSet ne supprime pas les PVC associés afin d'éviter les pertes accidentelles de données.
+
+28. InitContainer :
+    Conteneur d'initialisation exécuté en premier. Il prépare l'environnement ou les données d'un volume partagé avant que le conteneur applicatif principal ne démarre.
+
+29. readOnly sur un montage de volume :
+    ```yaml
+    volumeMounts:
+    - name: mon-vol
+      mountPath: /data
+      readOnly: true
+    ```
+
+30. emptyDir sizeLimit :
+    Si la taille des données stockées dans le répertoire `emptyDir` dépasse la valeur de `sizeLimit`, le kubelet expulse (evict) immédiatement le Pod du nœud.
+
+31. Secrets génériques encodés Base64 :
+    $ kubectl create secret generic db-pass --from-literal=password=monpass
+    # Les valeurs stockées sont encodées en Base64 et non chiffrées en base de données.
+
+32. Secret créé depuis un fichier :
+    $ kubectl create secret generic cert-sec --from-file=tls.crt --from-file=tls.key
+
+33. Secret TLS natif :
+    `kubernetes.io/tls` est consommé principalement par les contrôleurs d'Ingress pour activer le HTTPS.
+
+34. Secrets en Volume vs Variables d'environnement :
+    Les volumes mémoire (`tmpfs`) sont plus sécurisés car les variables d'environnement sont visibles dans les logs de débogage et via l'inspection des processus de l'hôte.
+
+35. Chargement global avec envFrom :
+    ```yaml
+    envFrom:
+    - secretRef:
+        name: db-secret
+    ```
+
+36. imagePullSecrets :
+    Obligatoire pour récupérer des images hébergées sur des registres privés nécessitant une authentification préalable.
+
+37. Sélection sélective des clés d'un Secret :
+    Utiliser le bloc `items` sous la définition du volume du Secret pour ne projeter que des clés spécifiques.
+
+38. ClusterIP Service et résolution DNS :
+    Résolution interne : `nslookup <nom-service>.<namespace>.svc.cluster.local`
+
+39. Accéder à un NodePort Service (ex: Minikube) :
+    $ minikube service <nom-service> --url
+
+40. LoadBalancer Service en local (Minikube Tunnel) :
+    Sur minikube, l'IP reste en `<pending>`. Il faut exécuter la commande suivante en tâche de fond :
+    $ minikube tunnel
+
+41. Service Headless :
+    `clusterIP: None` permet au client d'obtenir directement la liste des adresses IP des pods cibles au lieu d'une IP virtuelle unique.
+
+42. Endpoints / EndpointSlice :
+    Ces objets listent les adresses IP réelles des Pods sains qui répondent au sélecteur du Service.
+
+43. Requêtes inter-namespaces :
+    Doit obligatoirement utiliser le FQDN complet : `<service>.<namespace>.svc.cluster.local`.
+
+44. Redirection de port locale (port-forward) :
+    $ kubectl port-forward service/mon-service 8080:80
+    # Rediriger vers le Service permet de répartir le trafic, vers le Pod cible un conteneur unique.
+
+45. Configuration des Ports du Service :
+    * `port` : Port d'écoute du Service.
+    * `targetPort` : Port d'écoute de l'application dans le conteneur.
+    * `nodePort` : Port externe sur les nœuds (30000-32767).
+
+46. Debug réseau temporaire :
+    $ kubectl run debug-pod --rm -it --image=busybox -- wget -qO- http://mon-service
+
+47. Répartition de charge multi-déploiements :
+    Un seul service ciblant un label commun appliqué à deux déploiements distincts répartira le trafic équitablement entre eux.
+
+48. Étapes de diagnostic réseau :
+    1. Résolution DNS (`nslookup`).
+    2. Présence et état des `endpoints`.
+    3. Conformité des labels du sélecteur.
+    4. État de santé des pods (readiness).
+    5. Correspondance des ports.
+
+49. Validation NodePort :
+    $ curl <IP-Nœud>:<Port-NodePort>
+
+50. Sonde de vie (Liveness Probe) :
+    Vérifie si l'application doit être redémarrée.
+    ```yaml
+    livenessProbe:
+      httpGet:
+        path: /
+        port: 80
+    ```
+
+51. Sonde de disponibilité (Readiness Probe) :
+    Vérifie si le conteneur peut recevoir du trafic.
+    ```yaml
+    readinessProbe:
+      tcpSocket:
+        port: 6379
+    ```
+
+52. Sonde de démarrage (Startup Probe) :
+    Donne un délai de boot aux applications lentes avant que les autres sondes ne s'activent.
+    ```yaml
+    startupProbe:
+      httpGet:
+        path: /boot
+        port: 80
+      failureThreshold: 30
+      periodSeconds: 4
+    ```
+
+53. Aucun diagnostic de sonde :
+    Kubernetes considère le conteneur comme opérationnel et prêt dès que le processus principal s'est lancé avec succès.
+
+--------------------------------------------------------------------------------
+6/10 - LO5 — Solve problems with application shipping by using containers
+--------------------------------------------------------------------------------
+
+1. Erreur : `podman run -d --name web -p 80:8080 docker.io/library/nginx`
+   * *Problème* : Le port par défaut de Nginx est le port 80. L'ordre de publication `-p` est `hôte:conteneur`. Le conteneur écoute sur 80 et non 8080.
+   * *Correction* : `podman run -d --name web -p 8080:80 docker.io/library/nginx`
+
+2. Erreur : `podman run -d --name db -e MYSQL_ROOT_PASSWORD docker.io/library/mysql`
+   * *Problème* : La variable `MYSQL_ROOT_PASSWORD` est vide. L'image MySQL s'arrête si aucun mot de passe root n'est spécifié.
+   * *Correction* : `podman run -d --name db -e MYSQL_ROOT_PASSWORD=monmotdepasse docker.io/library/mysql`
+
+3. Erreur : `podman run -d --name app --network host -p 8080:80 docker.io/library/nginx`
+   * *Problème* : L'option `--network host` désactive le mappage de ports. L'option `-p` est ignorée et Nginx s'approprie directement le port 80 de l'hôte.
+   * *Correction* : `podman run -d --name app --network host docker.io/library/nginx` (Nginx écoutera sur le port 80 de l'hôte).
+
+4. Erreur : `podman run -d --name c1 docker.io/library/busybox`
+   * *Problème* : Busybox n'a pas de tâche d'arrière-plan par défaut. Le conteneur se termine immédiatement avec le code de retour 0.
+   * *Correction* : `podman run -d --name c1 docker.io/library/busybox sleep 1d`
+
+5. Erreur : `podman run --rm -d --name job docker.io/library/alpine echo hello` (et échec de logs)
+   * *Problème* : Le drapeau `--rm` supprime instantanément le conteneur dès sa fin d'exécution. En mode détaché, il s'éteint et disparaît avant de pouvoir consulter les logs.
+   * *Correction* : Exécuter en mode interactif/synchrone : `podman run --rm --name job docker.io/library/alpine echo hello`
+
+6. Erreur : `podman run -d -p 8080:80 --memory 8m docker.io/library/mysql`
+   * *Problème* : La limite de mémoire de 8 Mo est insuffisante pour le démarrage de MySQL, ce qui provoque un plantage immédiat (Out Of Memory).
+   * *Correction* : `podman run -d -p 8080:80 --memory 512m docker.io/library/mysql`
+
+7. Erreur : Échec de ping DNS sur le réseau par défaut.
+   * *Problème* : Le réseau bridge par défaut de Podman ne gère pas la résolution des noms DNS.
+   * *Correction* :
+     $ podman network create debug-net
+     $ podman run -d --name a --network debug-net docker.io/library/alpine sleep 1d
+     $ podman run -d --name b --network debug-net docker.io/library/alpine sleep 1d
+     $ podman exec a ping -c 1 b
+
+8. Erreur : Dossier vide ou erreur d'accès SELinux lors du montage de volume.
+   * *Problème* : Les règles SELinux bloquent l'accès au répertoire de l'hôte.
+   * *Correction* : Ajouter le drapeau `:z` :
+     $ podman run -d --name web -v ./html:/usr/share/nginx/html:z docker.io/library/nginx
+
+9-18. Erreurs de Containerfile :
+10. `FROM debian:12 \n RUN apt-get install -y nginx`
+    * *Problème* : La liste des dépôts n'a pas été mise à jour.
+    * *Correction* : `RUN apt-get update && apt-get install -y nginx`
+
+11. `CMD python app.py` (Shell Form)
+    * *Problème* : Le format shell lance l'application via `/bin/sh -c`, empêchant la transmission des signaux système comme SIGTERM.
+    * *Correction* : `CMD ["python", "app.py"]` (Exec Form)
+
+12. Rechargement du cache npm sur modification du code :
+    * *Problème* : Copier le code avant `RUN npm install` invalide le cache à chaque modification du code.
+    * *Correction* :
+      ```dockerfile
+      COPY package.json .
+      RUN npm install
+      COPY . .
+      ```
+
+13. Perte des commandes de base après modification de PATH :
+    * *Problème* : Redéfinir `ENV PATH=/app/bin` écrase les chemins système par défaut (`/bin`, `/usr/bin`).
+    * *Correction* : `ENV PATH=/app/bin:$PATH`
+
+14-15. Incompatibilité de ports EXPOSE/CMD :
+    * *Problème* : Le port documenté dans `EXPOSE` (8080) ne correspond pas au port configuré dans le serveur (3000).
+    * *Correction* : Ajuster le port ou lancer avec : `CMD ["python3", "-m", "http.server", "8080"]`
+
+16. Taille d'image Debian importante :
+    * *Problème* : Le cache APT est conservé dans l'image.
+    * *Correction* :
+      `RUN apt-get update && apt-get install -y build-essential && apt-get clean && rm -rf /var/lib/apt/lists/*`
+
+17. Erreurs d'accès USER/COPY :
+    * *Problème* : Basculer sur `USER appuser` avant de copier les fichiers empêche de modifier les permissions des répertoires si nécessaire.
+    * *Correction* :
+      ```dockerfile
+      COPY --chown=appuser:appuser requirements.txt /app/
+      USER appuser
+      RUN pip install --user -r /app/requirements.txt
+      ```
+
+18. Image Go trop volumineuse :
+    * *Problème* : Utilisation de l'image SDK Go en production.
+    * *Correction* : Utiliser un build multi-stage en copiant le binaire final dans une image `alpine` ou `scratch`.
+
+19. Diagnostic d'un Pod bloqué en Pending :
+    Utiliser `kubectl describe pod <pod>` et analyser les événements de fin (ex: manque de ressources CPU/RAM sur les nœuds, PVC non liée, ou nodeSelector non satisfait).
+
+20. Erreur de syntaxe YAML (Indentation) :
+    Vérifier la validité du YAML avec des outils comme `yamllint` ou en utilisant le drapeau `--dry-run=client` lors de l'application de vos configurations.
+
+21. Diagnostic d'ImagePullBackOff :
+    Indique un échec de récupération d'image. Vérifier l'orthographe du nom de l'image, la validité du tag, ou la présence du secret `imagePullSecrets` pour les registres privés.
+
+22. Diagnostic de CrashLoopBackOff :
+    Le conteneur se lance puis s'arrête en boucle. Consulter les logs de l'exécution précédente :
+    $ kubectl logs --previous <pod>
+
+23. Conteneur arrêté par OOMKilled :
+    Indique que l'application a consommé plus de mémoire que la limite autorisée. Hausser les limites de mémoire dans la configuration des ressources du Pod.
+
+24. Pods non Ready :
+    Indique un échec de la sonde de disponibilité (readinessProbe). Vérifier le port ciblé ou le statut de l'application via les logs.
+
+25. Service sans endpoints :
+    $ kubectl get endpoints
+    # Si vide : Vérifier la correspondance exacte entre le selector du service et les labels de vos pods.
+
+26. Erreur de concordance de sélecteur :
+    Kubernetes interdit l'application d'un manifeste si `spec.selector.matchLabels` ne correspond pas aux labels définis dans `spec.template.metadata.labels`.
+
+27. Demande de ressources trop élevée :
+    Si les requêtes de ressources d'un Pod dépassent la capacité maximale de tous les nœuds disponibles, le Pod restera indéfiniment en statut `Pending`.
+
+28. PVC inexistante :
+    Le Pod reste bloqué lors de l'étape de montage du volume (`FailedMount`). Créer la ressource PVC correspondante pour débloquer la situation.
+
+29. Conteneur Ubuntu qui s'arrête (Completed) :
+    Par défaut, l'image Ubuntu ne possède pas de processus persistant. Ajouter une commande de démarrage longue (ex: `sleep infinity`).
+
+30. Triage rapide des événements :
+    $ kubectl get events --sort-by=.lastTimestamp
+
+31. Connexion interactive et diagnostic DNS :
+    $ kubectl exec -it <pod> -- sh
+    $ nslookup kubernetes.default
+
+32. Déboguer un conteneur Distroless (sans shell) :
+    $ kubectl debug -it <pod> --image=busybox --target=<conteneur-cible>
+
+33. Test de connectivité à la volée :
+    $ kubectl run tmp-ping --rm -it --image=busybox -- nc -zv mon-service 80
+
+34. Diagnostic d'un nœud en NotReady :
+    $ kubectl describe node <nœud>
+    # Vérifier l'état du démon kubelet sur le nœud et la pression d'espace disque.
+
+35. Suppression forcée d'un Pod :
+    $ kubectl delete pod <pod> --grace-period=0 --force
+    # Risque : Risque de corruption de données ou de conflits d'écriture si une autre instance démarre avant l'arrêt complet de la première.
+
+36. Erreur apiVersion/kind :
+    Vérifier la correspondance avec l'API Kubernetes (ex: `apps/v1` pour un Deployment, `v1` pour un Pod).
+
+37. Erreur CreateContainerConfigError :
+    Signale qu'une clé attendue dans une ConfigMap ou un Secret lié à une variable d'environnement n'a pas été trouvée dans la ressource de configuration correspondante.
+
+38. Secret hors namespace :
+    Les secrets et ConfigMaps sont limités à leur propre namespace. Un Pod ne peut pas monter un Secret déclaré dans un autre namespace.
+
+39. ProgressDeadlineExceeded :
+    Le déploiement n'a pas réussi à finaliser sa mise à jour dans le temps imparti (souvent dû à un crash au démarrage des nouveaux pods).
+
+40. Détecter les erreurs avant application :
+    $ kubectl apply -f manifest.yaml --dry-run=server --validate=true
+
+41. Diagnostiquer un échec de connexion à la BDD :
+    Vérifier dans l'ordre : Pod BDD en cours d'exécution -> Existence du service -> Présence des endpoints -> Résolution DNS -> Port cible.
+
+42. Vérifier l'état d'arrêt d'un Pod :
+    $ kubectl get pod <pod> -o jsonpath='{.status.containerStatuses[*].lastState}'
+
+43. Comparaison OpenShift Route vs Kubernetes Ingress :
+    * Route (OpenShift) : Spécifique à OpenShift, plus simple à configurer, gère nativement le DNS et s'appuie sur le routeur OpenShift (basé sur HAProxy).
+    * Ingress (Kubernetes) : Ressource standard Kubernetes, nécessite l'installation d'un contrôleur d'Ingress tiers (ex: Nginx, Traefik).
+
+--------------------------------------------------------------------------------
+7/10 - LO6 — Evaluate container orchestration systems - theoretical
+--------------------------------------------------------------------------------
+
+1. Modèle réseau Kubernetes vs Réseau Docker :
+   * Docker : S'appuie principalement sur des réseaux ponts locaux (bridge) par hôte, avec du mappage de ports (NAT) pour communiquer avec l'extérieur.
+   * Kubernetes : Impose un modèle à plat où chaque Pod possède une adresse IP unique et routable à l'échelle du cluster. Tous les conteneurs peuvent communiquer directement avec les autres sans passer par du NAT.
+
+2. Flexibilité du stockage (K8s CSI vs Podman Plugins) :
+   L'interface CSI (Container Storage Interface) de Kubernetes est nettement plus robuste et flexible. Elle permet le provisionnement dynamique automatique de volumes persistants sur une grande variété de fournisseurs cloud (AWS, Azure, Ceph, NFS) à l'aide de StorageClasses, tandis que Podman se limite généralement à des configurations locales d'hôte ou à des montages réseau manuels.
+
+3. Pattern Operator vs Manifestes standards pour les Statefulsets :
+   * Operator : Automatise les tâches complexes (sauvegardes, restaurations, mises à niveau de schéma, gestion des pannes) grâce à une boucle de contrôle active (CRD + contrôleur). Cela demande un effort d'apprentissage mais simplifie la maintenance.
+   * Manifestes bruts : Requièrent un effort opérationnel manuel important pour les tâches de maintenance complexes (jour 2), bien qu'ils soient plus simples à mettre en œuvre initialement.
+
+4. Expérience développeur Plain K8s vs OpenShift S2I :
+   * Plain K8s : L'expérience est brute et exige du développeur d'écrire des fichiers YAML complexes et de gérer la construction des images.
+   * OpenShift S2I (Source-to-Image) : Automatise la création d'images directement à partir du code source de l'application, réduisant considérablement la complexité d'apprentissage pour le développeur.
+
+5. Migration d'OpenShift vers Kubernetes :
+   La migration nécessite d'adapter les ressources spécifiques à OpenShift (ex: `DeploymentConfig` en `Deployment`, `Route` en `Ingress`, et de configurer manuellement la sécurité RBAC pour remplacer les `SecurityContextConstraints` d'OpenShift).
+
+6. Agents CI/CD (K8s vs VMs dédiées) :
+   Exécuter des agents de build dans Kubernetes permet une allocation dynamique des ressources (autoscaling à la demande) et optimise l'usage des serveurs. Cependant, cela peut induire des ralentissements liés aux conflits de ressources (noisy-neighbor) et nécessite de sécuriser l'accès au socket du conteneur (Docker-in-Docker).
+
+7. Intégration cloud de Kubernetes :
+   Kubernetes s'intègre nativement aux APIs des Cloud Providers pour provisionner dynamiquement des ressources d'infrastructure (LoadBalancers, disques de stockage persistants via CSI, et augmentation du nombre de nœuds du cluster via le Cluster Autoscaler).
+
+8. Sécurité par défaut OpenShift vs Vanilla K8s :
+   OpenShift applique des politiques de sécurité très restrictives par défaut (via les SCC - Security Context Constraints), interdisant par exemple l'exécution de conteneurs en mode root. Vanilla Kubernetes nécessite une configuration manuelle de ces politiques de sécurité (ex: Pod Security Standards).
+
+9. Courbe d'apprentissage OpenShift vs K8s :
+   OpenShift ajoute des abstractions simplifiant le quotidien des développeurs (console graphique, builds intégrés). Cependant, pour l'équipe d'exploitation, cela augmente la complexité du système en raison des nombreux composants supplémentaires à administrer.
+
+10. Footprint K8s vs k3s :
+    k3s est une version allégée conçue pour les environnements contraints (IoT, Edge) et consomme beaucoup moins de mémoire vive. Utiliser un Kubernetes complet est démesuré pour des déploiements locaux sur un serveur unique.
+
+11. Docker Compose vs Kubernetes pour une petite équipe :
+    Pour une équipe restreinte, Docker Compose sur une machine unique offre une mise en œuvre simple et rapide sans surcoût opérationnel. Migrer vers Kubernetes se justifie uniquement si des exigences de haute disponibilité, de répartition géographique ou de montée en charge dynamique sont requises.
+
+12. Verrouillage propriétaire (Vendor Lock-in) K8s vs OpenShift :
+    * Vanilla K8s : Standard et portable d'un fournisseur cloud à un autre.
+    * OpenShift : Offre des fonctionnalités propriétaires intégrées qui peuvent rendre une migration vers du Kubernetes standard complexe et coûteuse.
+
+13. Pourquoi choisir OpenShift pour une grande entreprise ?
+    OpenShift offre une plateforme prête à l'emploi avec support éditeur (Red Hat), intégrant nativement la sécurité, le monitoring, les pipelines CI/CD et un registre d'images privé.
+
+14. Provisionnement stockage K8s vs VMs traditionnelles :
+    * VMs : Nécessite l'attribution manuelle de disques durs physiques ou virtuels par les administrateurs système.
+    * Kubernetes : Automatise entièrement le cycle de vie du stockage grâce aux mécanismes de PVC/PV et aux StorageClasses.
+
+15. Solution de déploiement pour une startup de deux ingénieurs :
+    Il est recommandé d'utiliser une solution PaaS managée (comme AWS ECS, Google Cloud Run ou Render). Cela permet de déployer rapidement sans subir la charge opérationnelle d'administration d'un cluster Kubernetes.
+
+16. Architecture Podman vs Docker :
+    Podman est "daemonless" (sans démon d'arrière-plan permanent) et s'appuie sur le modèle fork/exec standard de Linux. Cela permet de l'exécuter de façon sécurisée sans privilèges root (rootless), limitant les risques d'élévation de privilèges par rapport au démon centralisé de Docker.
+
+17. Surcharges opérationnelles Jour-2 : K8s managé vs Self-managed :
+    Les services managés (EKS, GKE, AKS) prennent en charge la gestion, la mise à jour et la sauvegarde du plan de contrôle (Control Plane), réduisant considérablement la charge de travail des équipes d'administration système.
+
+18. Architecture pour spiky traffic :
+    Kubernetes associé au composant KEDA (Kubernetes-based Event-driven Autoscaling) et à des mécanismes d'autoscaling des nœuds du cluster pour absorber rapidement les pics de charge.
+
+19. Transition Docker Swarm vers Kubernetes :
+    La migration de Swarm vers Kubernetes apporte une résilience accrue et un écosystème d'outils bien plus vaste. Cependant, elle requiert un investissement important de la part des équipes pour acquérir les compétences nécessaires.
+
+20. Kubernetes pour une architecture Microservices (Arguments pour) :
+    Kubernetes propose tous les composants essentiels pour les microservices : découverte de services native, répartition de charge intégrée, isolation réseau et gestion robuste du cycle de vie des conteneurs.
+
+21. Kubernetes pour les applications d'entreprise :
+    Sa grande richesse fonctionnelle, son immense communauté et le support des principaux acteurs du Cloud en font la plateforme de référence pour les applications critiques d'entreprise.
+
+22. OpenShift pour une architecture Microservices :
+    Il simplifie la mise en œuvre grâce à l'intégration native d'outils comme Service Mesh (Istio), simplifiant la gestion des communications réseau sécurisées entre vos microservices.
+
+23. OpenShift pour les applications d'entreprise :
+    Garantit la conformité aux exigences de sécurité strictes des grandes entreprises grâce à son support professionnel à long terme et sa sécurité renforcée par défaut.
+================================================================================
