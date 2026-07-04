@@ -245,119 +245,378 @@
 > **Explanation:** Concurrent writes risk major data corruption if the application is not built to handle file locking properly.
 
 ---
+## LO4 - Accelerated delivery of multilayer applications using containers
 
-## LO4 - Accelerated delivery using Kubernetes
+**Q1. Create a Deployment named web running nginx: 1.25 with 3 replicas using a single imperative kubectl create deployment command, then export its generated YAML to a file.**
+> **Command:** `kubectl create deployment web --image=nginx:1.25 --replicas=3 --dry-run=client -o yaml > dep.yaml`
+> **Explanation:** This generates the exact Kubernetes manifest structure without sending it to the API server, allowing you to save it.
 
-**Q1. Create Deployment imperatively and export YAML.**
-> **Command:** `kubectl create deploy web --image=nginx:1.25 --replicas=3 --dry-run=client -o yaml > d.yaml`
-> **Explanation:** Generates a clean starting manifest without actually deploying it to the cluster yet.
+**Q2. Enable pulling images from DockerHub as an authenticated user to lower the chance of hitting the pull limit. What kind of resource do you need to create?**
+> **Action:** Create a `Secret` of type `kubernetes.io/dockerconfigjson` (commonly called an image pull secret).
+> **Explanation:** This securely stores your registry credentials in the cluster so the kubelet can authenticate when pulling images.
 
-**Q4. Rolling update status.**
-> **Command:** `kubectl set image deploy/web nginx=nginx:1.27` & `kubectl rollout status`
-> **Explanation:** Gradually replaces old pods with new ones without downtime; tracked via rollout commands.
+**Q3. Scale web from 3 to 5 replicas two different ways (once with kubectl scale, once by editing the manifest) and show the ReplicaSet that results.**
+> **Command:** `kubectl scale deployment web --replicas=5` OR edit `dep.yaml` and `kubectl apply -f dep.yaml`.
+> **Explanation:** Both methods update the Deployment spec, which then commands its underlying ReplicaSet to spin up 2 additional pods.
 
-**Q6. Rolling Update: maxSurge 1, maxUnavailable 0.**
-> **Code:** Define strategy in Deployment spec.
-> **Explanation:** Guarantees 100% application capacity is maintained by forcing the new pod to be ready *before* killing an old one.
+**Q4. Perform a rolling update of web from nginx: 1.25 to nginx:1.27 and watch it with kubectl rollout status.**
+> **Command:** `kubectl set image deployment/web nginx=nginx:1.27` then `kubectl rollout status deployment/web`.
+> **Explanation:** The rollout automatically updates pods incrementally, ensuring zero downtime.
 
-**Q7. Recreate strategy.**
+**Q5. View a Deployment's rollout history and roll back to the previous revision. Explain what the CHANGE-CAUSE column shows and how to populate it.**
+> **Command:** `kubectl rollout history deployment/web` / `kubectl rollout undo deployment/web`.
+> **Explanation:** `CHANGE-CAUSE` shows the command or annotation that triggered the update. It is populated by using the `--kubernetes.io/change-cause` annotation.
+
+**Q6. Set the update strategy to Rolling Update with maxSurge: 1 and maxUnavailable: 0, and explain the effect on availability during an update.**
+> **Action:** Define these under `spec.strategy.rollingUpdate` in the YAML.
+> **Explanation:** This guarantees 100% capacity is maintained at all times, as Kubernetes will force a new pod to start and become ready before terminating any old pod.
+
+**Q7. Switch a Deployment's strategy to Recreate and describe a concrete scenario where this is required instead of Rolling Update.**
 > **Code:** `strategy: type: Recreate`
-> **Explanation:** Kills all old pods before starting new ones. Essential for legacy apps requiring exclusive database locks.
+> **Explanation:** All old pods are killed before new ones are created. This is mandatory for legacy applications or databases that require exclusive locks on a storage volume.
 
-**Q8. Requests vs Limits.**
-> **Code:** Add `resources: requests: ... limits: ...`
-> **Explanation:** `Requests` guarantee minimum node resources; `Limits` enforce a hard cap to prevent node starvation.
+**Q8. Add CPU/memory requests and limits to a Deployment's container and verify they appear in the running pod spec.**
+> **Code:** Add a `resources:` block with `requests` and `limits` under the container spec.
+> **Explanation:** Requests guarantee the pod gets minimum node resources to schedule, while limits cap usage to prevent it from starving the node.
 
-**Q10. ImagePullBackOff behavior.**
-> **Action:** Deploy bad tag, observe.
-> **Explanation:** The rollout automatically halts; old pods continue serving traffic seamlessly because the new ones failed to start.
+**Q9. Set revision HistoryLimit: 3 and explain how it affects your ability to roll back and how many old Replica Sets are kept.**
+> **Code:** `revisionHistoryLimit: 3`
+> **Explanation:** It retains exactly 3 old ReplicaSets. You will only be able to roll back to these 3 previous states, keeping the cluster clean of obsolete resources.
 
-**Q12. Kubectl expose.**
-> **Command:** `kubectl expose deploy/web --port=80`
-> **Explanation:** Creates a Service object that perfectly copies the Deployment's label selectors to route traffic.
+**Q10. Set a Deployment's image to a non-existent tag, observe the rollout get stuck, and explain why the old pods keep serving traffic.**
+> **Action:** Update image to `nginx:fake-tag`.
+> **Explanation:** The rollout halts in `ImagePullBackOff`. Old pods continue serving traffic because the rolling update strategy waits for new pods to become 'Ready' before terminating old ones.
 
-**Q16. StatefulSet.**
-> **Action:** Deploy StatefulSet with Headless Service.
-> **Explanation:** Provides predictable, sticky pod identities (pod-0, pod-1) and stable internal DNS records.
+**Q11. Use a label selector to list only the pods belonging to one Deployment, and explain the Deployment → ReplicaSet Pod selector relationship.**
+> **Command:** `kubectl get pods -l app=web`
+> **Explanation:** A Deployment manages a ReplicaSet using a label selector, and the ReplicaSet uses that exact same selector to manage and identify its Pods.
 
-**Q17. DaemonSet.**
-> **Action:** Deploy DaemonSet.
-> **Explanation:** Bypasses manual replicas to guarantee exactly one pod instance runs on *every* eligible cluster node.
+**Q12. Expose a Deployment with kubectl expose, then explain what object was created and how its selector was derived.**
+> **Command:** `kubectl expose deployment web --port=80`
+> **Explanation:** A Service object is created. Its `selector` is automatically copied directly from the Deployment's pod template labels.
 
-**Q19. CronJob.**
-> **Action:** Deploy CronJob.
-> **Explanation:** Triggers isolated Job executions based on a time schedule; can be paused easily using the `suspend` flag.
+**Q13. Add a sidecar (second) container to a Deployment's pod template and explain how the two containers share the pod network and volumes.**
+> **Action:** Add a second item under `containers:` in the pod spec.
+> **Explanation:** Containers in the same pod share the same network namespace (can communicate via localhost) and can mount the exact same storage volumes.
 
-**Q24. ConfigMap as Volume.**
-> **Action:** Mount ConfigMap.
-> **Explanation:** Dynamically injects each ConfigMap key as a distinct configuration file inside the pod's directory.
+**Q14. Write a Deployment manifest for httpd:2.4 with 2 replicas, a named container port, and a nodeSelector; explain why it stays Pending if no node matches.**
+> **Code:** Add `nodeSelector: disktype: ssd`.
+> **Explanation:** The scheduler strictly requires a node with that exact label. If none exists, the pod cannot be placed and remains Pending.
 
-**Q26. Secret as Volume.**
-> **Action:** Mount Secret.
-> **Explanation:** Injects sensitive data as highly secure, in-memory `tmpfs` files with restrictive Linux permissions.
+**Q15. Create a bare Pod (no controller) running busybox that sleeps, then explain what happens when you delete it versus a Deployment-managed pod.**
+> **Command:** `kubectl run bare --image=busybox -- sleep 3600` then `kubectl delete pod bare`.
+> **Explanation:** A bare pod is permanently gone when deleted. A Deployment-managed pod would be instantly recreated by its ReplicaSet to maintain the desired count.
 
-**Q34. Secret Volumes vs Env Vars.**
-> **Explanation:** Volumes are safer; environment variables are easily exposed if the application crashes and dumps its memory to logs.
+**Q16. Write a StatefulSet for redis:7 with 3 replicas plus a headless Service, and show the stable pod names and per-pod DNS records.**
+> **Action:** Deploy the YAML and run `kubectl get pods`.
+> **Explanation:** StatefulSets create pods with predictable, sticky names (e.g., `redis-0`, `redis-1`) and unique network identities via the headless service.
 
-**Q38-40. Services (ClusterIP, NodePort, LoadBalancer).**
-> **Action:** Create different service types.
-> **Explanation:** `ClusterIP` is internal only. `NodePort` opens a port on all host IPs. `LoadBalancer` requests a cloud IP.
+**Q17. Create a DaemonSet running a busybox agent and explain why exactly one pod runs per node.**
+> **Action:** Deploy a DaemonSet manifest.
+> **Explanation:** DaemonSets bypass the concept of "replicas" and interact directly with the scheduler to ensure every eligible node runs exactly one instance of the pod.
 
-**Q41. Headless Service.**
+**Q18. Create a Job using busybox/perl that computes something once and completes; show COMPLETIONS and read the result from logs.**
+> **Action:** Deploy a Job manifest calculating pi, wait, then `kubectl logs <job-pod>`.
+> **Explanation:** Jobs run a finite task until successful completion, rather than keeping a server running indefinitely.
+
+**Q19. Create a CronJob that prints the date every minute; show how to suspend it and how to list the Jobs it spawns.**
+> **Command:** `kubectl create cronjob date-job --schedule="* * * * *" --image=busybox -- date`. Suspend via `kubectl patch cronjob date-job -p '{"spec":{"suspend":true}}'`.
+> **Explanation:** CronJobs act like standard Linux cron, automatically spawning standard Kubernetes Jobs on a schedule.
+
+**Q20. Manually run a Job from an existing CronJob (kubectl create job--from=cronjob/...) to test it on demand.**
+> **Command:** `kubectl create job test-run --from=cronjob/date-job`
+> **Explanation:** This allows you to immediately test the CronJob's execution logic without waiting for the next scheduled minute.
+
+**Q21. Show that a StatefulSet creates and terminates pods in order, and contrast this with a Deployment.**
+> **Action:** Watch StatefulSet creation (`kubectl get pods -w`).
+> **Explanation:** StatefulSets strictly wait for `pod-0` to be Ready before starting `pod-1`. Deployments spin up all replicas in parallel.
+
+**Q22. Create a multi-container Pod where two containers share an emptyDir one writes a file, the other reads it. Prove it's shared.**
+> **Action:** Mount the same `emptyDir` volume to both containers. Container A runs `echo "hello" > /data/msg`, Container B runs `cat /data/msg`.
+> **Explanation:** `emptyDir` creates a temporary directory on the node that is shared across all containers in the pod.
+
+**Q23. List the Storage Classes, PVs and PVCs.**
+> **Command:** `kubectl get sc,pv,pvc`
+> **Explanation:** This provides a complete overview of the cluster's storage architecture, from available provisioners (sc) to claims (pvc).
+
+**Q24. Mount a ConfigMap as a volume so each key becomes a file, and verify the contents inside the pod.**
+> **Action:** Reference the ConfigMap in `volumes:` and mount it in `volumeMounts:`.
+> **Explanation:** Kubernetes dynamically injects the ConfigMap's keys as individual text files into the mounted directory.
+
+**Q25. Mount a single ConfigMap key to a specific path using subPath; explain when it's needed and its update caveat.**
+> **Code:** Use `subPath: mykey.conf` in the `volumeMount`.
+> **Explanation:** `subPath` is needed to inject a single file without overwriting the entire destination directory. Caveat: `subPath` mounts do not receive automatic live updates.
+
+**Q26. Mount a Secret as a volume and verify the files contain decoded values with restrictive permissions.**
+> **Action:** Mount the Secret and `kubectl exec` to check permissions (`ls -l`).
+> **Explanation:** Secrets are securely mounted as in-memory `tmpfs` files with restrictive default permissions (often `0420` or `0400`) to prevent unauthorized read access.
+
+**Q27. Show that scaling a StatefulSet creates one PVC per replica, then explain what happens to those PVCs when the StatefulSet is deleted.**
+> **Action:** Scale the StatefulSet, check `kubectl get pvc`. Then delete it and check again.
+> **Explanation:** Each pod gets its own unique PVC based on the `volumeClaimTemplate`. When the StatefulSet is deleted, the PVCs are intentionally left behind to prevent accidental data loss.
+
+**Q28. Use an initContainer to pre-populate data into a shared volume before the main container reads it.**
+> **Code:** Add `initContainers:` block that writes to an `emptyDir` mounted by the main container.
+> **Explanation:** InitContainers run strictly sequentially and must complete successfully before any main application container starts, making them ideal for setup tasks.
+
+**Q29. Set readOnly: true on a volume mount and prove writes are rejected.**
+> **Code:** `readOnly: true` in the `volumeMounts` section.
+> **Explanation:** This enforces immutability at the container filesystem level, throwing a "Read-only file system" error if the app tries to write.
+
+**Q30. Set a sizeLimit on an emptyDir and explain what happens if the container exceeds it.**
+> **Code:** `emptyDir: sizeLimit: 100Mi`
+> **Explanation:** If the container writes more than 100Mi, the kubelet will detect the violation and evict the pod to protect the node's disk.
+
+**Q31. Create a generic Secret from literals for a DB username/password, then show the stored values are base64-encoded, not encrypted.**
+> **Command:** `kubectl create secret generic db-auth --from-literal=user=admin` then `kubectl get secret db-auth -o yaml`.
+> **Explanation:** The values in the YAML are visibly base64 encoded strings, meaning anyone with read access to the Secret object can decode them instantly.
+
+**Q32. Create a Secret from files (--from-file) holding a certificate and key, and identify the resulting keys.**
+> **Command:** `kubectl create secret generic tls-cert --from-file=cert.pem --from-file=key.pem`
+> **Explanation:** The resulting Secret will have two keys exactly matching the filenames: `cert.pem` and `key.pem`.
+
+**Q33. Create a kubernetes.io/tls typed Secret from a cert/key pair and explain where it's consumed.**
+> **Command:** `kubectl create secret tls my-tls --cert=cert.pem --key=key.pem`
+> **Explanation:** This specialized Secret format enforces the presence of `tls.crt` and `tls.key` keys, and is directly consumed by Ingress controllers for HTTPS termination.
+
+**Q34. Mount a Secret as a volume and explain the security trade-offs versus env vars.**
+> **Explanation:** Volumes are much safer. Environment variables can easily be leaked if the application crashes and dumps its environment block to the logs, or via `docker inspect`.
+
+**Q35. Use envFrom with a secretRef to load every key of a Secret as env vars at once.**
+> **Code:** `envFrom: - secretRef: name: my-secret`
+> **Explanation:** This bulk-injects all key-value pairs from the Secret directly into the container's environment simultaneously, saving manifest space.
+
+**Q36. Create a docker-registry (image-pull) Secret and reference it via imagePullSecrets; explain when it's required.**
+> **Code:** Add `imagePullSecrets: - name: my-registry-key` to the pod spec.
+> **Explanation:** Required when pulling images from private, authenticated registries like a private Docker Hub repository or private Quay repo.
+
+**Q37. Create a Secret with several keys and selectively mount only one of them into a pod.**
+> **Code:** Use the `items:` array under `secret:` in the volume definition to specify which key maps to which path.
+> **Explanation:** This follows the principle of least privilege, exposing only the specific credential the application actually needs.
+
+**Q38. Create a ClusterIP Service for a Deployment and resolve it by DNS from another pod (nslookup <svc>.<ns>.svc.cluster.local).**
+> **Command:** `kubectl expose deployment web` then `nslookup web.default.svc.cluster.local` from a debug pod.
+> **Explanation:** The internal DNS server (CoreDNS) automatically creates an A record for the Service using this predictable namespace structure.
+
+**Q39. Create a NodePort Service and reach it via minikube service <svc> --url and $(minikube ip): <nodePort>.**
+> **Command:** `kubectl expose deploy web --type=NodePort --port=80`
+> **Explanation:** NodePort opens a static port (usually 30000-32767) on every node's IP in the cluster to allow external access.
+
+**Q40. Create a Load Balancer Service, explain why EXTERNAL-IP is <pending> on minikube, and obtain access with minikube tunnel.**
+> **Action:** Expose with `--type=LoadBalancer`. Run `minikube tunnel`.
+> **Explanation:** Bare-metal clusters and minikube lack cloud provider API integrations to provision real LoadBalancers. The tunnel simulates one locally.
+
+**Q41. Create a headless Service (clusterIP: None) for a StatefulSet and show it returns per-pod A records instead of a single VIP.**
 > **Code:** `clusterIP: None`
-> **Explanation:** Bypasses the proxy load balancer, returning the direct IP addresses of the backing pods via DNS.
+> **Explanation:** Bypasses the kube-proxy load balancer. DNS queries return the direct IP addresses of the backing pods, required for clustered databases.
 
-**Q50-52. Probes (Liveness, Readiness, Startup).**
-> **Action:** Define probes in container spec.
-> **Explanation:** *Liveness* restarts stuck apps. *Readiness* stops traffic to busy apps. *Startup* gives slow apps time to boot.
+**Q42. Inspect a Service's Endpoints/EndpointSlice and explain how they're populated from the pod selector.**
+> **Command:** `kubectl get endpoints <svc>`
+> **Explanation:** The endpoints controller continuously watches for Pods that match the Service's selector and are in a 'Ready' state, dynamically syncing their IPs to the Endpoints object.
 
----
+**Q43. Demonstrate cross-namespace access using the FQDN, and show the short name fails from another namespace.**
+> **Action:** Run a pod in `ns2` and try to curl `web` vs `web.ns1.svc.cluster.local`.
+> **Explanation:** Short names only search the pod's local namespace domain. Cross-namespace communication requires the Fully Qualified Domain Name (FQDN).
 
-## LO5 - Solve problems with application shipping
+**Q44. Compare kubectl port-forward to a Service versus to a Pod - explain the difference and when each fits.**
+> **Explanation:** Forwarding to a Service load-balances your local requests across any of the backend pods. Forwarding to a Pod forces connection to that specific instance (best for debugging a specific failing pod).
 
-**Q1. `podman run -d -p 80:8080 nginx` -> Unreachable.**
-> **Error:** Ports are reversed.
-> **Fix:** `-p 8080:80` (HostPort:ContainerPort).
+**Q45. Explain the difference between a Service's port, targetPort, and nodePort.**
+> **Explanation:** `port` is the internal cluster IP port. `targetPort` is the actual port the container is listening on. `nodePort` is the externally accessible host port on the nodes.
 
-**Q2. `podman run -d mysql` -> Exits immediately.**
-> **Error:** Missing required environment variables.
-> **Fix:** Add `-e MYSQL_ROOT_PASSWORD=secret`.
+**Q46. Verify connectivity to a ClusterIP Service from a throwaway debug pod (kubectl run tmp --rm-it -- image=busybox -- sh) with wget/nc.**
+> **Command:** `kubectl run tmp --rm -it --image=busybox -- sh` -> `wget -O- http://web`
+> **Explanation:** A throwaway interactive pod provides an isolated environment inside the cluster network to execute raw connectivity tests.
 
-**Q4. `podman run -d busybox` -> Exited(0).**
-> **Error:** No long-running foreground process.
-> **Fix:** Add a command like `sleep infinity`.
+**Q47. Create two Deployments and one Service that load-balances across both by sharing a common label; prove requests hit both.**
+> **Action:** Give Deployment A and B the label `app=shared`. Create a Service selecting `app=shared`.
+> **Explanation:** Services are entirely decoupled from Deployments; they purely route traffic to *any* pod matching their label selector.
 
-**Q6. `--memory 8m mysql` -> Crash.**
-> **Error:** Memory limit too low (OOMKilled).
-> **Fix:** Increase memory to at least `512m`.
+**Q48. Systematically diagnose why a pod can't reach a Service: DNS endpoints selector labels readiness -> port.**
+> **Explanation:** Diagnosis flow: 1. Is the Pod ready? 2. Do the Pod labels match the Service selector? 3. Are the Endpoints populated? 4. Does the Service DNS resolve? 5. Is the target port correct?
 
-**Q10. `FROM debian` -> `RUN apt-get install nginx` fails.**
-> **Error:** Local package cache is empty.
-> **Fix:** `RUN apt-get update && apt-get install -y nginx`.
+**Q49. Expose a service with a NodePort and verify it works.**
+> **Command:** `kubectl expose deployment web --type=NodePort --port=80`
+> **Explanation:** Creates a cluster-wide high port mapping for immediate external testing without needing an Ingress.
 
-**Q12. Node app `COPY . /app` then `npm install` is slow.**
-> **Error:** Source code changes invalidate the cache for `npm install`.
-> **Fix:** Copy `package.json` first, run `npm install`, *then* `COPY . /app`.
+**Q50. Add an HTTP liveness Probe hitting / on port 80 to an nginx Deployment and verify via kubectl describe pod.**
+> **Action:** Define `livenessProbe:` with an `httpGet` action.
+> **Explanation:** The kubelet periodically pings the endpoint. If it returns an error code (or times out), the kubelet forcefully restarts the container.
 
-**Q21. Pod in ImagePullBackOff.**
-> **Error:** Typo in image name, or missing authentication.
-> **Fix:** Check image tag spelling, or provide `imagePullSecrets`.
+**Q51. Add a tcpSocket readiness probe to a redis container on port 6379 and verify it.**
+> **Action:** Define `readinessProbe:` with a `tcpSocket` action.
+> **Explanation:** Readiness probes block the pod from receiving Service traffic until the network socket successfully accepts TCP connections.
 
-**Q22. Pod in CrashLoopBackOff.**
-> **Error:** Application is crashing constantly.
-> **Fix:** Use `kubectl logs --previous` to read the stack trace of the dead container.
+**Q52. Configure a startup probe with a failure Threshold periodSeconds budget for a ~2-minute boot and justify the numbers.**
+> **Code:** `startupProbe: failureThreshold: 12, periodSeconds: 10`.
+> **Explanation:** `12 * 10s = 120 seconds`. This disables liveness checks for 2 minutes, granting a slow legacy application ample time to boot without being falsely restarted.
 
-**Q24. Pods never become Ready.**
-> **Error:** Failing readiness probe.
-> **Fix:** Check the probe HTTP path/port; the app might be running on a different port than defined.
+**Q53. Explain the default behavior when no probes are defined at all.**
+> **Explanation:** Without probes, Kubernetes blindly assumes a container is fully healthy and ready to serve traffic the exact millisecond its primary process (PID 1) starts.
+## LO5 - Solve problems with application shipping by using containers
 
-**Q25. Service returns nothing.**
-> **Error:** Selector mismatch.
-> **Fix:** Use `kubectl get endpoints`. If empty, the Service `selector` doesn't match the Pod `labels`.
+**Q1. `podman run -d --name web -p 80:8080 docker.io/library/nginx`**
+> **Error:** Nginx listens on 80, but the site isn't reachable on the host. The port mapping is reversed.
+> **Fix:** Use `-p 8080:80` (HostPort:ContainerPort).
 
-**Q48. Diagnosing Service connectivity flow.**
-> **Methodology:**
-> 1. Check if Pod is **Running**.
-> 2. Verify **Labels** match Service Selectors.
-> 3. Verify **Endpoints** are populated.
-> 4. Test internal **DNS** resolution.
+**Q2. `podman run-d--name db -e MYSQL_ROOT_PASSWORD docker.io/library/mysql`**
+> **Error:** The container exits during init because the environment variable is declared but empty.
+> **Fix:** Provide a value: `-e MYSQL_ROOT_PASSWORD=secret`.
+
+**Q3. `podman run-d--name app --network host -p 8080:80 docker.io/library/nginx`**
+> **Error:** The `-p` flag is ignored.
+> **Explanation:** `--network host` uses the host's exact network stack, rendering isolated port mappings ineffective.
+
+**Q4. `podman run-d--name c1 docker.io/library/busybox`**
+> **Error:** The container goes straight to Exited (0).
+> **Fix:** Busybox has no default long-running command. Add one like `sleep infinity` to keep it alive.
+
+**Q5. `podman run --rm-d-name job docker.io/library/alpine echo hello`**
+> **Error:** `podman logs job` fails.
+> **Explanation:** The `--rm` flag deletes the container (and its logs) the exact moment it finishes echoing "hello".
+
+**Q6. `podman run -d -p 8080:80 --memory 8m docker.io/library/mysql`**
+> **Error:** The database never becomes healthy.
+> **Explanation:** An 8MB memory limit is far too small for MySQL, causing the kernel to instantly OOMKill it.
+
+**Q7. Name resolution fails when trying to ping container 'b' from container 'a'.**
+> **Error:** The containers are on the default bridge network, which lacks DNS.
+> **Fix:** Create a custom user-defined network and attach both containers to it.
+
+**Q8. `podman run -d --name web -v./html:/usr/share/nginx/html docker.io/library/nginx`**
+> **Error:** Files aren't visible or SELinux denies access.
+> **Fix:** Add the `:Z` flag (`-v ./html:...:Z`) to apply the correct SELinux context to the volume.
+
+**Q9. (Instruction to identify Dockerfile mistakes - covered in subsequent questions).**
+> **Action:** Analyze typical Containerfile errors.
+
+**Q10. `FROM debian:12 \n RUN apt-get install -y nginx`**
+> **Error:** The build fails to find the package because the local package cache is empty.
+> **Fix:** Prepend the update command: `RUN apt-get update && apt-get install -y nginx`.
+
+**Q11. `CMD python app.py` (Shell vs Exec form).**
+> **Error:** The app starts but doesn't handle stop signals cleanly.
+> **Fix:** Use the JSON array exec form: `CMD ["python", "app.py"]` to avoid wrapping the process in a shell.
+
+**Q12. `COPY ./app \n RUN npm install`**
+> **Error:** Every source code change triggers a full, slow `npm install`.
+> **Fix:** Reorder for caching: `COPY package.json .`, then `RUN npm install`, and finally `COPY . .`.
+
+**Q13. `ENV PATH=/app/bin \n RUN apk add --no-cache curl`**
+> **Error:** `curl` and `sh` aren't found. Overwriting `PATH` completely deletes system paths.
+> **Fix:** Append to the path instead: `ENV PATH=$PATH:/app/bin`.
+
+**Q14 & Q15. `EXPOSE 8080` but app runs on `3000`.**
+> **Error:** Nothing answers on 8080. 
+> **Explanation:** `EXPOSE` is merely documentation. It does not actively forward traffic. The app is actually listening on 3000.
+
+**Q16. `RUN apt-get update && apt-get install -y build-essential`**
+> **Error:** The image size is huge because cache lists are saved.
+> **Fix:** Clean up in the same layer: append `&& apt-get clean && rm -rf /var/lib/apt/lists/*`.
+
+**Q17. `USER appuser \n COPY requirements.txt /app/requirements.txt`**
+> **Error:** Permission denied during `pip install`. `USER` makes subsequent `COPY` commands run as root by default.
+> **Fix:** Use `COPY --chown=appuser:appgroup requirements.txt ...`.
+
+**Q18. `RUN go build -o app` resulting in a 1GB image.**
+> **Error:** The final image contains the entire Go compiler toolchain.
+> **Fix:** Use a multi-stage build. Compile in stage one, copy *only* the final binary into a minimal stage two.
+
+**Q19. A pod is stuck Pending.**
+> **Action:** Walk through `kubectl describe pod`.
+> **Explanation:** Usually caused by scheduling constraints: insufficient CPU/memory on nodes, missing NodeSelectors, or unbound PVCs.
+
+**Q20. Deployment fails after removing a couple of spaces.**
+> **Error:** YAML parsing error.
+> **Fix:** YAML relies strictly on indentation. Restore the spaces to fix the nested schema structure.
+
+**Q21. A pod is in ImagePullBackOff.**
+> **Action:** Diagnose the cause.
+> **Fix:** Verify image name spelling, tag existence, or add `imagePullSecrets` if the registry is private.
+
+**Q22. A pod is in CrashLoopBackOff.**
+> **Action:** Use `kubectl logs --previous <pod>`.
+> **Explanation:** This command retrieves the stack trace of the *crashed* container to identify the application bug.
+
+**Q23. A pod's last state shows OOMKilled.**
+> **Action:** Confirm via `describe pod` and fix it.
+> **Fix:** The container exceeded its hard memory limit. Raise `resources.limits.memory` in the manifest.
+
+**Q24. A Deployment's pods never become Ready.**
+> **Action:** Trace it to a failing readiness probe.
+> **Fix:** Verify the probe's HTTP path, port, and authentication. If the app is slow to start, add a `startupProbe`.
+
+**Q25. A Service returns nothing (kubectl get endpoints is empty).**
+> **Error:** Service to Pod label mismatch.
+> **Fix:** Ensure the Service's `selector` exactly matches the `labels` defined in the Pod template.
+
+**Q26. `spec.selector.matchLabels` doesn't match `spec.template.metadata.labels`.**
+> **Error:** `kubectl apply` returns a validation error.
+> **Fix:** Deployments mandate label parity. Make sure both blocks contain the exact same key-value pairs.
+
+**Q27. `resources.requests` exceed any node's capacity.**
+> **Error:** The pod stays Pending due to "Insufficient cpu/memory".
+> **Fix:** Lower the resource requests, or add a larger node to the cluster.
+
+**Q28. A pod mounts a PVC that doesn't exist.**
+> **Error:** Pod stuck in ContainerCreating / FailedMount.
+> **Fix:** Create the PersistentVolumeClaim with the exact name referenced in the Pod spec.
+
+**Q29. An Ubuntu container with no long-running command shows CrashLoopBackOff.**
+> **Error:** Base OS images exit naturally, and Kubernetes tries to restart them endlessly.
+> **Fix:** Add a persistent command like `command: ["sleep", "infinity"]`.
+
+**Q30. Triage everything that happened to a pod over time.**
+> **Command:** `kubectl get events --sort-by=.lastTimestamp`
+> **Explanation:** Sorts cluster events chronologically to easily visualize the exact sequence of failures.
+
+**Q31. Debug DNS from inside a pod.**
+> **Command:** `kubectl exec -it <pod> -- sh`
+> **Action:** Run `nslookup kubernetes.default` and inspect `cat /etc/resolv.conf`.
+
+**Q32. Troubleshoot a distroless/no-shell container.**
+> **Command:** `kubectl debug -it <pod> --image=busybox --target=<container>`
+> **Explanation:** Ephemeral containers inject debugging utilities (like shell/curl) directly into a running, locked-down pod.
+
+**Q33. Test connectivity to a Service from inside the cluster.**
+> **Command:** `kubectl run tmp --rm -it --image=busybox -- sh`
+> **Explanation:** Spins up a throwaway pod perfectly isolated for running internal network tests (`wget`, `nc`).
+
+**Q34. A node shows NotReady.**
+> **Action:** List what you'd check.
+> **Explanation:** Inspect `kubectl describe node` for DiskPressure/MemoryPressure, or check host-level `kubelet` logs.
+
+**Q35. A pod is stuck Terminating.**
+> **Error:** Finalizers are blocking deletion, or graceful shutdown is hanging.
+> **Fix:** `kubectl delete pod <pod> --grace-period=0 --force`. Risk: May leave orphaned resources or corrupt state.
+
+**Q36. Wrong apiVersion/kind pairing (e.g., apps/v1 + Pod).**
+> **Error:** Kubernetes schema validation error.
+> **Fix:** A Pod must use `apiVersion: v1`, whereas Deployments/StatefulSets use `apiVersion: apps/v1`.
+
+**Q37. Pod fails with CreateContainerConfigError.**
+> **Error:** A `configMapKeyRef` or `secretKeyRef` is referencing a key that does not exist in the ConfigMap/Secret.
+> **Fix:** Add the missing key to the ConfigMap, or correct the typo in the Pod spec.
+
+**Q38. A pod can't mount a Secret from a different namespace.**
+> **Error:** Secrets are strictly namespace-scoped for security.
+> **Fix:** Duplicate the Secret into the Pod's namespace.
+
+**Q39. Rollout is stuck with Progress Deadline Exceeded.**
+> **Action:** Use `kubectl describe deployment` to find the cause.
+> **Explanation:** Usually means the new ReplicaSet failed to spin up Ready pods within the default 600-second timeout.
+
+**Q40. Catch typos before applying manifests.**
+> **Command:** `kubectl apply -f file.yaml --dry-run=server`
+> **Explanation:** Uses the cluster's API to safely validate manifest syntax and fields without making actual changes.
+
+**Q41. App logs say it can't reach its database Service.**
+> **Action:** Systematically verify the chain.
+> **Flow:** 1. Pod running? -> 2. Service exists? -> 3. Endpoints populated (Labels match)? -> 4. DNS resolves? -> 5. Port correct?
+
+**Q42. Determine the root cause of repeated restarts automatically.**
+> **Command:** `kubectl get pod <pod> -o jsonpath='{.status.containerStatuses[0].lastState.terminated.exitCode}'`
+> **Explanation:** Extracts the exact exit code (e.g., 137 for OOM, 1 for App Crash) crucial for debugging.
+
+**Q43. Compare OpenShift Route to Ingress.**
+> **Explanation:** OpenShift Routes are a native concept providing built-in edge routing and TLS termination out-of-the-box, whereas vanilla Kubernetes Ingress requires deploying a separate controller (like Nginx).
