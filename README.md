@@ -339,43 +339,43 @@ Flags are where the real power of `kubectl` lives. You will use these constantly
 
 **Q1. Imperative Deployment creation + export YAML.**
 > **Command:** `kubectl create deploy web --image=nginx:1.25 --replicas=3 --dry-run=client -o yaml > d.yaml`
-> **Explanation:** Generates a base manifest locally without sending it to the API.
+> **Explanation:** Generates a base manifest locally without sending it to the API server.
 
 **Q2. DockerHub auth secret.**
-> **Command:** Create a `kubernetes.io/dockerconfigjson` Secret.
-> **Explanation:** Stores registry credentials so the kubelet can pull private images.
+> **Command:** `kubectl create secret docker-registry my-registry-key --docker-server=docker.io --docker-username=myuser --docker-password=mypassword --docker-email=my@email.com`
+> **Explanation:** Stores registry credentials securely so the kubelet can pull private images.
 
 **Q3. Scale Deployment.**
 > **Command:** `kubectl scale deploy web --replicas=5`
-> **Explanation:** Updates the Deployment, which updates the underlying ReplicaSet.
+> **Explanation:** Updates the Deployment, which instantly updates the underlying ReplicaSet.
 
 **Q4. Rolling update + rollout status.**
-> **Command:** `kubectl set image deploy/web nginx=nginx:1.27` -> `kubectl rollout status deploy/web`
-> **Explanation:** Gradually replaces old pods with new ones, ensuring zero downtime.
+> **Command:** `kubectl set image deploy/web nginx=nginx:1.27 && kubectl rollout status deploy/web`
+> **Explanation:** Gradually replaces old pods with new ones, ensuring zero downtime, and watches the progress.
 
 **Q5. Rollout history and undo.**
-> **Command:** `kubectl rollout history deploy/web` / `kubectl rollout undo deploy/web`
-> **Explanation:** Reverts to a previous revision. `CHANGE-CAUSE` tracks the command used.
+> **Command:** `kubectl rollout history deploy/web` followed by `kubectl rollout undo deploy/web --to-revision=1`
+> **Explanation:** Reverts to a previous revision. `CHANGE-CAUSE` tracks the command used if `--kubernetes.io/change-cause` was annotated.
 
 **Q6. maxSurge: 1 and maxUnavailable: 0.**
-> **Command:** Define in strategy spec.
-> **Explanation:** Guarantees 100% capacity; new pods must be ready before old ones terminate.
+> **Command:** `kubectl patch deploy web -p '{"spec":{"strategy":{"type":"RollingUpdate","rollingUpdate":{"maxSurge":1,"maxUnavailable":0}}}}'`
+> **Explanation:** Guarantees 100% capacity; new pods must be fully ready before old ones terminate.
 
 **Q7. Recreate strategy.**
-> **Command:** `strategy: type: Recreate`
-> **Explanation:** Kills all old pods first. Required for legacy apps requiring exclusive DB locks.
+> **Command:** `kubectl patch deploy web -p '{"spec":{"strategy":{"type":"Recreate"}}}'`
+> **Explanation:** Kills all old pods first before starting new ones. Required for legacy apps needing exclusive DB locks.
 
 **Q8. Requests and limits.**
-> **Command:** Define `resources: requests/limits` in container spec.
-> **Explanation:** Requests guarantee node capacity; limits cap max usage.
+> **Command:** `kubectl set resources deploy web -c=nginx --limits=cpu=200m,memory=512Mi --requests=cpu=100m,memory=256Mi`
+> **Explanation:** Requests guarantee node capacity; limits cap max usage to prevent node starvation.
 
 **Q9. revisionHistoryLimit.**
-> **Command:** `revisionHistoryLimit: 3`
-> **Explanation:** Retains only 3 old ReplicaSets to allow rollbacks without cluttering etcd.
+> **Command:** `kubectl patch deploy web -p '{"spec":{"revisionHistoryLimit": 3}}'`
+> **Explanation:** Retains only 3 old ReplicaSets to allow rollbacks without cluttering the cluster's etcd database.
 
 **Q10. Bad image tag rollout.**
-> **Command:** Set image to non-existent tag.
-> **Explanation:** Rollout halts in ImagePullBackOff. Old pods keep serving traffic safely.
+> **Command:** `kubectl set image deploy/web nginx=nginx:fake-tag`
+> **Explanation:** Rollout halts in `ImagePullBackOff`. Old pods keep serving traffic safely.
 
 **Q11. Label selectors Deployment -> Pod.**
 > **Command:** `kubectl get pods -l app=web`
@@ -383,173 +383,259 @@ Flags are where the real power of `kubectl` lives. You will use these constantly
 
 **Q12. kubectl expose.**
 > **Command:** `kubectl expose deploy web --port=80`
-> **Explanation:** Creates a Service matching the exact pod selectors of the Deployment.
+> **Explanation:** Creates a ClusterIP Service matching the exact pod selectors of the Deployment.
 
 **Q13. Sidecar container.**
-> **Command:** Add second container to pod spec.
-> **Explanation:** Both containers share the same localhost network and can mount the same volumes.
+> **Command:** ```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: web-sidecar}
+spec:
+  selector: {matchLabels: {app: web}}
+  template:
+    metadata: {labels: {app: web}}
+    spec:
+      containers:
+      - name: main
+        image: nginx
+      - name: sidecar
+        image: busybox
+        command: ["sleep", "infinity"]
 
-**Q14. nodeSelector.**
-> **Command:** `nodeSelector: disktype: ssd`
-> **Explanation:** Pod stays Pending if no cluster node matches the required label.
+> **Explanation** : Both containers share the same localhost network namespace and can mount the same volumes.
 
-**Q15. Bare pod vs Deployment pod.**
-> **Command:** `kubectl delete pod <bare-pod>`
-> **Explanation:** Bare pods disappear forever. Deployment pods are instantly recreated.
+Q14. nodeSelector.
 
-**Q16. StatefulSet + Headless Service.**
-> **Command:** Deploy StatefulSet.
-> **Explanation:** Provides sticky pod identities (pod-0, pod-1) and stable internal DNS records.
+    Command: kubectl patch deploy web -p '{"spec":{"template":{"spec":{"nodeSelector":{"disktype":"ssd"}}}}}'
+    Explanation: Pod stays Pending if no cluster node matches the required label.
+
+Q15. Bare pod vs Deployment pod.
+
+    Command: kubectl run bare-pod --image=busybox -- sleep 3600 then kubectl delete pod bare-pod
+    Explanation: Bare pods disappear forever. Deployment pods are instantly recreated by the ReplicaSet.
+
+Q16. StatefulSet + Headless Service.
+
+    Command: ```bash
+    kubectl create svc clusterip redis-headless --clusterip="None" &&
+
+    cat <<EOF | kubectl apply -f -
+    apiVersion: apps/v1
+    kind: StatefulSet
+    metadata: {name: redis}
+    spec:
+    serviceName: "redis-headless"
+    replicas: 3
+    selector: {matchLabels: {app: redis}}
+    template:
+    metadata: {labels: {app: redis}}
+    spec:
+    containers: [{name: redis, image: redis:7}]
+
+> **Explanation:** Provides sticky pod identities (redis-0, redis-1) and stable internal DNS records.
 
 **Q17. DaemonSet.**
-> **Command:** Deploy DaemonSet.
-> **Explanation:** Ensures exactly one pod instance runs on *every* eligible node.
+> **Command:** ```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: {name: busybox-agent}
+spec:
+  selector: {matchLabels: {app: agent}}
+  template:
+    metadata: {labels: {app: agent}}
+    spec:
+      containers: [{name: agent, image: busybox, command: ["sleep", "infinity"]}]
+EOF
 
-**Q18. Job.**
-> **Command:** Deploy Job.
-> **Explanation:** Executes a finite task to completion, then stops.
+    Explanation: Ensures exactly one pod instance runs on every eligible node.
 
-**Q19. CronJob.**
-> **Command:** Deploy CronJob.
-> **Explanation:** Triggers Jobs on a schedule. Can be paused with `suspend: true`.
+Q18. Job.
 
-**Q20. Run Job from CronJob.**
-> **Command:** `kubectl create job --from=cronjob/my-cron test-run`
-> **Explanation:** Triggers the task immediately for testing.
+    Command: kubectl create job pi-job --image=perl:5.34 -- perl -Mbignum=bpi -wle 'print bpi(2000)'
+    Explanation: Executes a finite task to completion, then stops and retains logs.
 
-**Q21. StatefulSet startup order.**
-> **Command:** Observe pod creation.
-> **Explanation:** Starts sequentially (pod-0 -> pod-1), unlike Deployments which spin up in parallel.
+Q19. CronJob.
 
-**Q22. emptyDir.**
-> **Command:** Mount `emptyDir` on two containers in one pod.
-> **Explanation:** Creates a shared scratchpad directory on the node.
+    Command: kubectl create cronjob my-cron --image=busybox --schedule="* * * * *" -- date (Suspend it with: kubectl patch cronjob my-cron -p '{"spec":{"suspend":true}}')
+    Explanation: Triggers Jobs on a schedule. Can be paused easily.
 
-**Q23. List SC, PV, PVC.**
-> **Command:** `kubectl get sc,pv,pvc`
-> **Explanation:** Displays storage classes, physical volumes, and volume claims.
+Q20. Run Job from CronJob.
 
-**Q24. ConfigMap as Volume.**
-> **Command:** Mount ConfigMap.
-> **Explanation:** Injects each ConfigMap key as a distinct configuration file.
+    Command: kubectl create job test-run --from=cronjob/my-cron
+    Explanation: Triggers the task immediately for on-demand testing.
 
-**Q25. ConfigMap subPath.**
-> **Command:** Use `subPath: file.conf`.
-> **Explanation:** Mounts a single file without erasing the target folder, but loses live updates.
+Q21. StatefulSet startup order.
 
-**Q26. Secret as Volume.**
-> **Command:** Mount Secret.
-> **Explanation:** Securely mounts decoded data as in-memory `tmpfs` files with restrictive permissions.
+    Command: kubectl get pods -l app=redis -w
+    Explanation: Watches creation. Starts sequentially (pod-0 must be Ready before pod-1 starts), unlike Deployments.
 
-**Q27. StatefulSet PVCs.**
-> **Command:** Delete StatefulSet.
-> **Explanation:** Generates unique PVCs per pod that persist after deletion to prevent data loss.
+Q22. emptyDir.
 
-**Q28. initContainer.**
-> **Command:** Define `initContainers`.
-> **Explanation:** Runs completely before the main app starts, ideal for data pre-population.
+    Command: kubectl set volume deploy/web --add --name=shared-dir --type=emptyDir --mount-path=/data
+    Explanation: Creates a shared scratchpad directory on the node that survives container restarts but not pod deletion.
 
-**Q29. readOnly volume mount.**
-> **Command:** `readOnly: true`
-> **Explanation:** Enforces filesystem immutability; writes are rejected by the kernel.
+Q23. List SC, PV, PVC.
 
-**Q30. emptyDir sizeLimit.**
-> **Command:** `emptyDir: sizeLimit: 100Mi`
-> **Explanation:** If exceeded, the kubelet evicts the pod to protect node disk space.
+    Command: kubectl get sc,pv,pvc
+    Explanation: Displays storage classes, physical volumes, and volume claims.
 
-**Q31. Generic Secret.**
-> **Command:** `kubectl create secret generic auth --from-literal=u=admin`
-> **Explanation:** Secrets are just base64-encoded strings, they are NOT encrypted by default.
+Q24. ConfigMap as Volume.
 
-**Q32. Secret from file.**
-> **Command:** `kubectl create secret generic certs --from-file=cert.pem`
-> **Explanation:** The filename becomes the secret key.
+    Command: kubectl create configmap my-config --from-literal=key=value then kubectl set volume deploy/web --add --name=config-vol --type=configmap --configmap-name=my-config --mount-path=/etc/config
+    Explanation: Injects each ConfigMap key as a distinct configuration file.
 
-**Q33. TLS Secret.**
-> **Command:** `kubectl create secret tls cert --cert=c.pem --key=k.pem`
-> **Explanation:** Enforces `tls.crt`/`tls.key` format, directly consumed by Ingress controllers.
+Q25. ConfigMap subPath.
 
-**Q34. Secret Volume vs Env Var.**
-> **Command:** N/A
-> **Explanation:** Volumes are safer; environment variables easily leak into crash logs.
+    Command: kubectl patch deploy web -p '{"spec":{"template":{"spec":{"containers":[{"name":"nginx","volumeMounts":[{"name":"config-vol","mountPath":"/etc/config/specific.conf","subPath":"key"}]}]}}}}'
+    Explanation: Mounts a single file without erasing the target folder, but loses automatic live updates.
 
-**Q35. envFrom secretRef.**
-> **Command:** `envFrom: - secretRef: name: my-secret`
-> **Explanation:** Bulk-injects all keys of a secret as environment variables.
+Q26. Secret as Volume.
 
-**Q36. imagePullSecrets.**
-> **Command:** `imagePullSecrets: - name: registry-key`
-> **Explanation:** Supplies credentials required to pull from private registries.
+    Command: kubectl set volume deploy/web --add --name=sec-vol --type=secret --secret-name=my-secret --mount-path=/etc/secrets
+    Explanation: Securely mounts decoded data as in-memory tmpfs files with restrictive permissions.
 
-**Q37. Selective Secret mount.**
-> **Command:** Use `items:` in volume projection.
-> **Explanation:** Exposes only specific keys to the pod, enforcing least privilege.
+Q27. StatefulSet PVCs.
 
-**Q38. ClusterIP DNS.**
-> **Command:** `nslookup <svc>.<ns>.svc.cluster.local`
-> **Explanation:** Internal DNS resolves the service name across the cluster.
+    Command: kubectl delete statefulset redis then kubectl get pvc
+    Explanation: Generates unique PVCs per pod that persist after deletion to prevent data loss.
 
-**Q39. NodePort Service.**
-> **Command:** `kubectl expose deploy web --type=NodePort`
-> **Explanation:** Opens a static high port on every node's IP.
+Q28. initContainer.
 
-**Q40. LoadBalancer Service (Minikube).**
-> **Command:** `minikube tunnel`
-> **Explanation:** Minikube lacks a real cloud LB, the tunnel simulates the external IP locally.
+    Command: kubectl patch deploy web -p '{"spec":{"template":{"spec":{"initContainers":[{"name":"init","image":"busybox","command":["sh","-c","echo 1 > /data/file"]}]}}}}'
+    Explanation: Runs completely before the main app starts, ideal for data pre-population.
 
-**Q41. Headless Service.**
-> **Command:** `clusterIP: None`
-> **Explanation:** Bypasses proxy VIP, returning direct A records for backing pods.
+Q29. readOnly volume mount.
 
-**Q42. Endpoints / EndpointSlice.**
-> **Command:** `kubectl get endpoints`
-> **Explanation:** Dynamically tracks the IPs of 'Ready' pods matching the service selector.
+    Command: kubectl patch deploy web -p '{"spec":{"template":{"spec":{"containers":[{"name":"nginx","volumeMounts":[{"name":"shared-dir","mountPath":"/data","readOnly":true}]}]}}}}'
+    Explanation: Enforces filesystem immutability; writes are rejected by the kernel.
 
-**Q43. Cross-namespace access.**
-> **Command:** Use FQDN `web.ns1.svc.cluster.local`.
-> **Explanation:** Short names only search the local namespace domain.
+Q30. emptyDir sizeLimit.
 
-**Q44. port-forward Pod vs Service.**
-> **Command:** `kubectl port-forward svc/web 8080:80`
-> **Explanation:** Service load-balances; Pod connects strictly to that exact instance.
+    Command: kubectl patch deploy web -p '{"spec":{"template":{"spec":{"volumes":[{"name":"shared-dir","emptyDir":{"sizeLimit":"100Mi"}}]}}}}'
+    Explanation: If exceeded, the kubelet evicts the pod to protect node disk space.
 
-**Q45. port vs targetPort vs nodePort.**
-> **Command:** N/A
-> **Explanation:** port = Service IP port, targetPort = Pod port, nodePort = Host node port.
+Q31. Generic Secret.
+
+    Command: kubectl create secret generic auth --from-literal=username=admin then kubectl get secret auth -o yaml
+    Explanation: Secrets are just base64-encoded strings, they are NOT encrypted by default.
+
+Q32. Secret from file.
+
+    Command: kubectl create secret generic certs --from-file=cert.pem
+    Explanation: The filename becomes the secret key.
+
+Q33. TLS Secret.
+
+    Command: kubectl create secret tls web-cert --cert=cert.pem --key=key.pem
+    Explanation: Enforces tls.crt and tls.key formatting, directly consumed by Ingress controllers.
+
+Q34. Secret Volume vs Env Var.
+
+    Command: Volume: kubectl set volume deploy/web --add --type=secret --secret-name=auth --mount-path=/sec | Env: kubectl set env --from=secret/auth deploy/web
+    Explanation: Volumes are safer; environment variables easily leak into crash logs.
+
+Q35. envFrom secretRef.
+
+    Command: kubectl set env --from=secret/auth deploy/web
+    Explanation: Bulk-injects all keys of a secret as environment variables.
+
+Q36. imagePullSecrets.
+
+    Command: kubectl patch serviceaccount default -p '{"imagePullSecrets": [{"name": "my-registry-key"}]}'
+    Explanation: Supplies credentials required to pull from private registries automatically for pods in this namespace.
+
+Q37. Selective Secret mount.
+
+    Command: kubectl patch deploy web -p '{"spec":{"template":{"spec":{"volumes":[{"name":"sec-vol","secret":{"secretName":"auth","items":[{"key":"username","path":"user.txt"}]}}]}}}}'
+    Explanation: Exposes only specific keys to the pod, enforcing least privilege.
+
+Q38. ClusterIP DNS.
+
+    Command: kubectl run dns-test -it --rm --image=busybox:1.28 -- nslookup web.default.svc.cluster.local
+    Explanation: Internal DNS resolves the service name across the cluster.
+
+Q39. NodePort Service.
+
+    Command: kubectl expose deploy web --type=NodePort --port=80
+    Explanation: Opens a static high port on every node's IP for external access.
+
+Q40. LoadBalancer Service (Minikube).
+
+    Command: kubectl expose deploy web --type=LoadBalancer --port=80 then run minikube tunnel
+    Explanation: Minikube lacks a real cloud LB, the tunnel simulates the external IP locally.
+
+Q41. Headless Service.
+
+    Command: kubectl create svc clusterip my-headless --clusterip="None" --tcp=80:80
+    Explanation: Bypasses proxy VIP, returning direct A records for backing pods.
+
+Q42. Endpoints / EndpointSlice.
+
+    Command: kubectl get endpoints web
+    Explanation: Dynamically tracks the IPs of 'Ready' pods matching the service selector.
+
+Q43. Cross-namespace access.
+
+    Command: kubectl run test --rm -it --image=busybox -- wget -qO- http://web.ns1.svc.cluster.local
+    Explanation: Short names only search the local namespace domain. FQDN is required.
+
+Q44. port-forward Pod vs Service.
+
+    Command: kubectl port-forward svc/web 8080:80 vs kubectl port-forward pod/web-xyz 8080:80
+    Explanation: Service load-balances; Pod connects strictly to that exact instance.
+
+Q45. port vs targetPort vs nodePort.
+
+    Command: ```bash
+    cat <<EOF | kubectl apply -f -
+    apiVersion: v1
+    kind: Service
+    metadata: {name: multi-port-svc}
+    spec:
+    type: NodePort
+    selector: {app: web}
+    ports:
+
+    port: 80
+    targetPort: 8080
+    nodePort: 30080
+    EOF
+
+> **Explanation:** `port` = Service IP port, `targetPort` = Pod internal port, `nodePort` = Host node port.
 
 **Q46. Debug pod for connectivity.**
 > **Command:** `kubectl run tmp --rm -it --image=busybox -- sh`
-> **Explanation:** Creates an isolated environment to execute `wget`/`nc` tests.
+> **Explanation:** Creates an isolated environment to execute `wget` or `nc` tests.
 
 **Q47. Service across two Deployments.**
-> **Command:** Give both deployments the same label.
-> **Explanation:** Services route to *any* pod matching the selector, regardless of the controller.
+> **Command:** `kubectl expose deploy deploy1 --name=shared-svc --selector=app=shared`
+> **Explanation:** Services route to *any* pod matching the selector, regardless of the controller managing it.
 
 **Q48. Service connectivity diagnosis flow.**
-> **Command:** N/A
-> **Explanation:** Check: Pod Ready? -> Labels match? -> Endpoints populated? -> DNS resolves? -> TargetPort correct?
+> **Command:** `kubectl get pods -l app=web` -> `kubectl get endpoints web` -> `kubectl run tmp --rm -it --image=busybox -- nslookup web`
+> **Explanation:** Systematically checks: Pod Ready? -> Labels match? -> Endpoints populated? -> DNS resolves?
 
 **Q49. Expose NodePort.**
-> **Command:** `kubectl expose deploy web --type=NodePort`
+> **Command:** `kubectl expose deploy web --type=NodePort --port=80`
 > **Explanation:** Opens a cluster-wide port for immediate external testing.
 
 **Q50. Liveness Probe.**
-> **Command:** Define `livenessProbe`.
+> **Command:** `kubectl patch deploy web -p '{"spec":{"template":{"spec":{"containers":[{"name":"nginx","livenessProbe":{"httpGet":{"path":"/","port":80}}}]}}}}'`
 > **Explanation:** Pings an endpoint; restarts the pod automatically upon failure.
 
 **Q51. Readiness Probe.**
-> **Command:** Define `readinessProbe: tcpSocket`.
-> **Explanation:** Blocks service traffic routing until the TCP socket connects.
+> **Command:** `kubectl patch deploy web -p '{"spec":{"template":{"spec":{"containers":[{"name":"nginx","readinessProbe":{"tcpSocket":{"port":80}}}]}}}}'`
+> **Explanation:** Blocks service traffic routing to this pod until the TCP socket connects.
 
 **Q52. Startup Probe.**
-> **Command:** Define `startupProbe`.
-> **Explanation:** Delays liveness checks to give slow legacy applications time to boot.
+> **Command:** `kubectl patch deploy web -p '{"spec":{"template":{"spec":{"containers":[{"name":"nginx","startupProbe":{"httpGet":{"path":"/","port":80},"failureThreshold":12,"periodSeconds":10}}]}}}}'`
+> **Explanation:** Delays liveness checks to give slow legacy applications time to boot (e.g., 120s buffer).
 
 **Q53. Default probe behavior.**
-> **Command:** N/A
-> **Explanation:** Without probes, Kubernetes assumes a container is fully ready the moment PID 1 starts.
-
----
+> **Command:** `kubectl get pod <pod-name> -o jsonpath='{.spec.containers[*].livenessProbe}'`
+> **Explanation:** Returns nothing if undefined. Without probes, K8s assumes a container is fully ready the moment PID 1 starts.
 
 ## LO5 - Solve problems with application shipping
 
