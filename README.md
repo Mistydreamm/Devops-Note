@@ -108,6 +108,38 @@ C'est la méthode standard en production. Vous ne donnez pas d'ordres directs. V
 
 **Final Note:** The biggest mental hurdle is moving from OpenShift's "platform-as-a-service" feel to Kubernetes's "build-it-yourself" reality. You'll likely need to start writing more of your own deployment manifests rather than relying on OpenShift's source-to-image (S2I) pipelines.
 
+Voici la structure classique d'un fichier deployment.yaml, suivie de son explication ligne par ligne.
+```yaml
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+    name: mon-application-web
+    labels:
+    app: frontend
+    spec:
+    replicas: 3
+    selector:
+    matchLabels:
+    app: frontend
+    template:
+    metadata:
+    labels:
+    app: frontend
+    spec:
+    containers:
+    - name: serveur-nginx
+    image: nginx:1.25
+    ports:
+    - containerPort: 80
+    resources:
+    requests:
+    memory: "128Mi"
+    cpu: "250m"
+    limits:
+    memory: "256Mi"
+    cpu: "500m"
+```
+
 *What kind of environment will your new Kubernetes cluster be running in (e.g., a managed cloud provider like EKS/GKE, or a bare-metal on-premise setup)?*
 
 ## LO1 - Use of containers and container services
