@@ -140,6 +140,63 @@ Voici la structure classique d'un fichier deployment.yaml, suivie de son explica
     cpu: "500m"
 ```
 
+Un manifeste Kubernetes se divise toujours en 4 grandes parties principales :
+1. L'en-tête (Qui suis-je ?)
+
+    apiVersion : Indique à Kubernetes quelle version de son API utiliser. Pour les Deployments, c'est toujours apps/v1.
+
+    kind : Le type de ressource que vous voulez créer (ici, un Deployment).
+
+2. Les Métadonnées (Identité)
+
+    metadata.name : Le nom unique de votre déploiement. C'est ce nom que vous verrez en tapant kubectl get deployments.
+
+    metadata.labels : Des étiquettes (clés/valeurs) pour classer et organiser vos ressources.
+
+3. Les Spécifications du Deployment (Les règles du jeu)
+
+    spec.replicas : Le nombre de conteneurs (Pods) identiques que vous voulez faire tourner en même temps.
+
+    spec.selector.matchLabels : Très important ! C'est ainsi que le Deployment "trouve" et contrôle ses pods (ex: "Je contrôle tous les pods qui ont l'étiquette app: frontend").
+
+4. Le Template du Pod (Le moule de fabrication)
+
+    template : C'est le "moule" des Pods. Tout ce qui est ici décrit à quoi ressembleront vos conteneurs.
+
+    template.metadata.labels : Attention ! Ces étiquettes doivent absolument correspondre au matchLabels vu juste au-dessus.
+
+    spec.containers : La liste des conteneurs à lancer dans ce Pod.
+
+        name : Le nom interne du conteneur.
+
+        image : L'image exacte à télécharger (précisez toujours la version, ex: :1.25).
+
+        ports.containerPort : Le port sur lequel votre application écoute.
+
+        resources : (Recommandé en production)
+
+            requests : Le minimum de RAM/CPU garanti pour pouvoir démarrer sur un serveur.
+
+            limits : Le plafond maximum. Si l'application le dépasse, elle est tuée (OOMKilled) pour protéger le serveur.
+
+Créez un fichier sur votre machine :
+```Bash
+
+nano mon-deploiement.yaml
+```
+Collez le code YAML dedans et sauvegardez.
+
+Envoyez la commande à Kubernetes :
+```Bash
+
+kubectl apply -f mon-deploiement.yaml
+```
+Vérifiez que ça fonctionne :
+```Bash
+
+kubectl get deployments
+kubectl get pods
+```
 *What kind of environment will your new Kubernetes cluster be running in (e.g., a managed cloud provider like EKS/GKE, or a bare-metal on-premise setup)?*
 
 ## LO1 - Use of containers and container services
